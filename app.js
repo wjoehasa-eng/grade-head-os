@@ -455,7 +455,7 @@
       '</div>' +
       '<p class="card-note">이번 달 동학년 체크리스트 진행률입니다.</p>' +
       '<div class="btn-row"><button class="btn small line" data-a="nav" data-r="radar">레이더 열기</button>' +
-      '<button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(md ? md.notice : '') + '">' + icon('copy') + ' 이번 달 공지 복사</button></div>' +
+      '<button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(md ? md.notice : '') + '">' + icon('copy') + ' 공지 복사</button></div>' +
       '</section>' +
 
       '</div><div class="col">' +
@@ -631,6 +631,14 @@
       }).join('') +
       '<div class="notice-pre" style="margin-top:14px">' + esc(J.noticeTemplate) + '</div>' +
       '<div class="btn-row"><button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(J.noticeTemplate) + '">' + icon('copy') + ' 공지 양식 복사</button></div>' +
+      '</section>' +
+
+      '<section class="card">' +
+      '<div class="card-head"><span class="card-cap">회의</span></div>' +
+      '<h2 class="card-title">12개 반 회의를 짧게 끝내는 법</h2>' +
+      '<ul class="plain-list">' + J.meetingRules.map(function (t) { return '<li><span class="b"></span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' +
+      '<div class="notice-pre" style="margin-top:14px">' + esc(J.meetingTemplate) + '</div>' +
+      '<div class="btn-row"><button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(J.meetingTemplate) + '">' + icon('copy') + ' 회의 안건 양식 복사</button></div>' +
       '</section>' +
 
       '<section class="card">' +
@@ -1143,8 +1151,12 @@
       db.url = u2;
       persist();
       if (!u2) { setSync('off'); toast('이 기기에만 저장합니다'); return; }
+      try { history.replaceState(null, '', '#s=' + btoa(u2)); } catch (e) {}
       setSync('busy', '연결 중…');
-      pullState(false).then(function () { toast('연결됐습니다'); }).catch(function () { toast('연결 실패 — 주소를 확인해 주세요'); });
+      pullState(hasLocalData).then(function () {
+        if (hasLocalData) pushState();
+        toast('연결됐습니다');
+      }).catch(function () { toast('연결 실패 — 주소를 확인해 주세요'); });
       return;
     }
     if (a === 'export') { exportJSON(); return; }
