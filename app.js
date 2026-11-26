@@ -455,7 +455,7 @@
       '</div>' +
       '<p class="card-note">이번 달 동학년 체크리스트 진행률입니다.</p>' +
       '<div class="btn-row"><button class="btn small line" data-a="nav" data-r="radar">레이더 열기</button>' +
-      '<button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(md ? md.notice : '') + '">' + icon('copy') + ' 공지 복사</button></div>' +
+      '<button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(md ? noticeOf(md, db.state.grade) : '') + '">' + icon('copy') + ' 공지 복사</button></div>' +
       '</section>' +
 
       '</div><div class="col">' +
@@ -508,10 +508,15 @@
   }
 
   /* ------------------------------------------------------------- 레이더 */
+  function noticeOf(d, g) {
+    return String(d.notice || '').replace('[3학년]', '[' + g + '학년]');
+  }
+
   function viewRadar() {
     var m = radarMonth;
     var d = D.radar[m];
     var g = radarGrade;
+    var notice = noticeOf(d, g);
     var done = 0, total = d.checks.length;
     d.checks.forEach(function (_, i) {
       var c = db.state.checks[g + '-' + m + '-' + i];
@@ -554,8 +559,8 @@
       '<section class="card">' +
       '<div class="card-head"><span class="card-cap">공지 초안</span></div>' +
       '<h2 class="card-title" style="margin-bottom:12px">그대로 보내는 안내문</h2>' +
-      '<div class="notice-pre">' + esc(d.notice) + '</div>' +
-      '<div class="btn-row"><button class="btn primary small" data-a="copy" data-copy="' + encodeURIComponent(d.notice) + '">' + icon('copy') + ' 공지 복사</button></div>' +
+      '<div class="notice-pre">' + esc(notice) + '</div>' +
+      '<div class="btn-row"><button class="btn primary small" data-a="copy" data-copy="' + encodeURIComponent(notice) + '">' + icon('copy') + ' 공지 복사</button></div>' +
       '<p class="card-note">○ 자리만 학교 일정으로 채우면 됩니다. 보내기 전에 날짜·마감·양식을 한 번 더 확인하세요.</p>' +
       '</section>' +
 
