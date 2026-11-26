@@ -75,6 +75,7 @@ STUB = r"""
         setValue(v) { sh._row(row)[col - 1] = v; return this; }
       };
     }
+    clear() { this.grid = []; return this; }
     appendRow(vals) {
       this._row(this.grid.length + 1);
       const target = this.grid[this.grid.length - 1];
@@ -168,11 +169,22 @@ def main():
             ping = get({"action": "ping"})
             check(ping.get("ok") and ping.get("app") == "grade-head-os", f"ping {ping.get('app')} v{ping.get('backend')}")
             tabs = ping["sheet"]["tabs"]
-            check(set(["docs", "prev", "log", "안내"]).issubset(set(tabs)), f"탭 생성 {tabs}")
+            check(set(["docs", "prev", "log", "안내", "명단", "레이더_정리", "사안_트래커", "판단_기록"]).issubset(set(tabs)),
+                  f"탭 생성 {tabs}")
 
-            # save (small)
-            doc = {"v": 1, "grade": "3", "checks": {"3-11-0": {"v": 1, "at": 1}}, "tracker": [], "retro": [{"id": "a", "situation": "테스트"}], "verdicts": []}
-            body = {"action": "save", "key": "state", "data": doc}
+            # save (small) + 사람용 미러 표
+            doc = {"v": 2, "year": "2026", "years": ["2026"], "byYear": {"2026": {
+                "grade": "3", "role": "3학년 부장", "checks": {"3-11-0": {"v": 1, "at": 1}},
+                "tracker": [], "retro": [{"id": "a", "situation": "테스트"}], "radar": {}, "roster": []}}}
+            mirror = [
+                {"tab": "레이더_정리", "header": ["학년도", "직책·학년", "월", "구분", "내용", "완료여부", "링크"],
+                 "rows": [["2026", "3학년 부장 / 3학년", "11월", "체크리스트", "평가 마감 확인", "O", ""]]},
+                {"tab": "사안_트래커", "header": ["학년도", "기록시각", "반", "대상", "유형", "긴급도", "상태", "보고여부", "내용", "후속조치", "링크"],
+                 "rows": [["2026", "2026-11-26", "3반", "김○○", "민원", "보통", "진행", "해당 없음", "상담 요청", "재통화", ""]]},
+                {"tab": "판단_기록", "header": ["학년도", "날짜", "상황", "판단", "결과", "다음엔", "태그", "링크"],
+                 "rows": [["2026", "2026-11-26", "질문", "확인 후 안내", "", "", "판단", ""]]}
+            ]
+            body = {"action": "save", "key": "state", "data": doc, "mirror": mirror}
             r1 = post(body)
             check(r1.get("ok") and r1.get("rev"), f"첫 저장 rev={r1.get('rev')}")
             rev1 = r1["rev"]
@@ -210,6 +222,34 @@ def main():
                 return JSON.stringify({lastRow: sh.getLastRow(), key: sh.getRange(2,1).getValues()[0][0]});
             }"""))
             check(prev["lastRow"] >= 2 and prev["key"] == "state", f"prev 백업 {prev}")
+
+            # 미러 표가 실제로 써졌는지
+            mr = json.loads(call("""() => {
+                const out = {};
+                ['레이더_정리','사안_트래커','판단_기록'].forEach(n => {
+                  const sh = __ss.getSheetByName(n);
+                  out[n] = { lastRow: sh.getLastRow(), head: sh.getRange(1,1,1,1).getValues()[0][0],
+                             first: sh.getRange(2,1,1,3).getValues()[0] };
+                });
+                return JSON.stringify(out);
+            }"""))
+            check(mr["레이더_정리"]["lastRow"] == 2 and mr["레이더_정리"]["head"] == "학년도", f"레이더_정리 기록 {mr['레이더_정리']}")
+            check(mr["사안_트래커"]["lastRow"] == 2 and "3반" in mr["사안_트래커"]["first"], f"사안_트래커 기록 {mr['사안_트래커']['first']}")
+            check(mr["판단_기록"]["lastRow"] == 2, "판단_기록 기록")
+
+            # 명단 탭 읽기
+            call("""() => {
+                const sh = __ss.getSheetByName('명단');
+                sh.getRange(1,1,1,5).setValues([['구분','반','번호','이름','비고']]);
+                sh.getRange(2,1,3,5).setValues([['학생','3반','1','김○○',''],['학생','3반','2','이○○',''],['교사','3반','','박○○','담임']]);
+                return 1;
+            }""")
+            ros = get({"action": "roster"})
+            check(len(ros.get("roster", [])) == 3, f"action=roster {len(ros.get('roster', []))}명")
+            check(ros["roster"][2]["kind"] == "교사" and ros["roster"][2]["name"] == "박○○", "교사 행 읽기")
+            load_r = get({"action": "load", "key": "state"})
+            check(len(load_r.get("roster", [])) == 3, "load 응답에 명단 포함")
+            check(mr["레이더_정리"]["head"] == "학년도", "머리행 유지")
 
             # keys
             keys = get({"action": "keys"})

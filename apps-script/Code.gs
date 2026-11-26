@@ -1,38 +1,24 @@
 /**
- * 학년부장 OS — 범용 저장 백엔드 (Google Apps Script) v1.1.0
+ * 학년부장 OS — 범용 저장 백엔드 (Google Apps Script) v1.2.0
  * ================================================================
- * 프론트가 보내는 JSON “문서”를 내 비공개 구글 시트에 그대로 저장합니다.
- * 앱에 필드가 아무리 늘어나도 이 파일을 다시 배포할 일이 없습니다.
+ * 프론트가 보내는 JSON “문서”를 내 비공개 구글 시트에 그대로 저장하고,
+ * 사람이 바로 열어보는 평면 표 3개(레이더_정리 · 사안_트래커 · 판단_기록)를 함께 최신화합니다.
  *
  * 시트 구조
- *  · docs 탭 : key | rev | updated_at | chunks | data(칸1) | data(칸2) … 
- *              구글 시트 셀 하나는 5만 자까지만 담을 수 있어서,
- *              JSON을 45,000자 단위로 잘라 옆 칸에 이어 붙입니다(chunks = 칸 수).
- *              보통은 1칸에 다 들어가 people이 읽어도 JSON으로 보입니다.
+ *  · docs 탭 : key | rev | updated_at | chunks | data(칸1) | data(칸2) …
  *  · prev 탭 : key | updated_at | chunks | data… — 저장 직전 내용 한 벌(한 단계 되돌리기)
  *  · log 탭  : time | key | rev | bytes — 저장 이력(최근 200줄)
- *
- * 준비 (한 번만, 약 3분) — 자세한 그림 설명은 저장소의 SETUP.md
- *  1. https://script.google.com → 새 프로젝트 → 이 파일 내용을 붙여 넣고 저장
- *  2. 배포 → 새 배포 → 유형(⚙) = 웹 앱
- *       · 다음 사용자로 실행: 나
- *       · 액세스 권한: 모든 사용자   ← 폰 브라우저에서 접속하려면 반드시 이 값
- *     → 액세스 승인 → 웹 앱 URL(.../exec) 복사
- *  3. 앱 설정 → 비공개 시트 연결에 주소를 붙여 넣고 [저장]
+ *  · 명단 탭 : 구분 | 반 | 번호 | 이름 | 비고 — 앱이 읽어 대상자 칩으로 씁니다
+ *  · 레이더_정리 / 사안_트래커 / 판단_기록 — 앱이 저장할 때마다 미러링하는 사람용 표
  *
  * API
  *  GET  ?action=ping                    연결 확인 { ok, app, backend, sheet }
  *  GET  ?action=keys                    저장된 문서 목록
- *  GET  ?action=load&key=state          { ok, key, data, rev, updatedAt }
- *  POST { action:'save', key, baseRev, data }
+ *  GET  ?action=load&key=state          { ok, key, data, rev, roster }
+ *  GET  ?action=roster                  { ok, roster:[{kind,cls,no,name,memo}] }
+ *  POST { action:'save', key, baseRev, data, mirror:[{tab,header,rows}] }
  *                                       { ok, rev, updatedAt } — rev가 다르면 conflict
  *  ?callback=함수이름                    JSONP 로 감싸서 응답
- *
- * 안전장치
- *  · LockService 로 동시 저장을 잠급니다.
- *  · baseRev 가 현재 rev 와 다르면 conflict 로 돌려주고, 앱이 항목별로 병합해 다시 저장합니다.
- *  · 저장 직전 내용을 prev 탭에 한 벌 남깁니다.
- *  · 문서 하나가 900KB 를 넘으면 거절합니다.
  */
 
 /** 시트 ID를 직접 넣어도 됩니다. 비워 두면 이름으로 찾고, 없으면 만듭니다. */
@@ -40,11 +26,21 @@ var SHEET_ID = '';
 
 var SHEET_NAME = '[비공개] 학년부장 운영 시스템';
 var APP_NAME = 'grade-head-os';
-var BACKEND_VERSION = '1.1.0';
+var BACKEND_VERSION = '1.2.0';
 var MAX_CHUNK = 45000;    // 셀당 안전 한도 (구글 시트 한도 50,000자)
 var MAX_CHUNKS = 20;      // 최대 900KB
 var LOG_KEEP = 200;
 var TIMEZONE = 'Asia/Seoul';
+var ROSTER_TAB = '명단';
+var ROSTER_HEADER = ['구분', '반', '번호', '이름', '비고'];
+var MAX_MIRROR_ROWS = 6000;
+
+/* 앱이 저장할 때마다 채우는 사람용 표 */
+var MIRROR_TABS = [
+  { tab: '레이더_정리', header: ['학년도', '직책·학년', '월', '구분', '내용', '완료여부', '링크'] },
+  { tab: '사안_트래커', header: ['학년도', '기록시각', '반', '대상', '유형', '긴급도', '상태', '보고여부', '내용', '후속조치', '링크'] },
+  { tab: '판단_기록', header: ['학년도', '날짜', '상황', '판단', '결과', '다음엔', '태그', '링크'] }
+];
 
 /* ------------------------------------------------------------------ 진입점 */
 function doGet(e) {
@@ -65,6 +61,7 @@ function handle(e, body) {
     if (action === 'ping') out = ping();
     else if (action === 'keys') out = listKeys();
     else if (action === 'load') out = loadDoc(p.key || body.key);
+    else if (action === 'roster') out = listRoster();
     else if (action === 'save') out = saveDoc(body);
     else out = { ok: false, error: '알 수 없는 action: ' + action };
   } catch (err) {
@@ -124,6 +121,24 @@ function ensureTabs(ss) {
     log.setFrozenRows(1);
   }
 
+  // 명단 (사람이 채우는 탭 — 앱은 읽기만 합니다)
+  var roster = ss.getSheetByName(ROSTER_TAB);
+  if (!roster) roster = ss.insertSheet(ROSTER_TAB);
+  if (roster.getLastRow() === 0) {
+    roster.getRange(1, 1, 1, ROSTER_HEADER.length).setValues([ROSTER_HEADER]);
+  }
+  roster.setFrozenRows(1);
+
+  // 사람용 미러 표 3개
+  MIRROR_TABS.forEach(function (m) {
+    var sh = ss.getSheetByName(m.tab);
+    if (!sh) sh = ss.insertSheet(m.tab);
+    if (sh.getLastRow() === 0) {
+      sh.getRange(1, 1, 1, m.header.length).setValues([m.header]);
+    }
+    sh.setFrozenRows(1);
+  });
+
   var first = ss.getSheets()[0];
   if (first && first.getName() === 'Sheet1' && first.getLastRow() === 0) {
     first.setName('안내');
@@ -136,7 +151,7 @@ function ensureTabs(ss) {
     if (ss.getSpreadsheetTimeZone() === 'Etc/GMT') ss.setSpreadsheetTimeZone(TIMEZONE);
   } catch (err) {}
 
-  return { docs: docs, prev: prev, log: log };
+  return { docs: docs, prev: prev, log: log, roster: roster };
 }
 
 function findRow(sheet, key) {
@@ -193,6 +208,36 @@ function ping() {
   };
 }
 
+/** 명단 탭 — 구분 | 반 | 번호 | 이름 | 비고 */
+function readRoster(ss) {
+  var sh = ss.getSheetByName(ROSTER_TAB);
+  if (!sh) return [];
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var vals = sh.getRange(2, 1, last - 1, ROSTER_HEADER.length).getValues();
+  var out = [];
+  for (var i = 0; i < vals.length; i++) {
+    var r = vals[i];
+    var name = String(r[3] == null ? '' : r[3]).trim();
+    if (!name) continue;
+    out.push({
+      kind: String(r[0] || '').trim(),
+      cls: String(r[1] || '').trim(),
+      no: String(r[2] == null ? '' : r[2]).trim(),
+      name: name,
+      memo: String(r[4] == null ? '' : r[4]).trim()
+    });
+    if (out.length >= 3000) break;
+  }
+  return out;
+}
+
+function listRoster() {
+  var ss = getSheet();
+  ensureTabs(ss);
+  return { ok: true, roster: readRoster(ss) };
+}
+
 function listKeys() {
   var ss = getSheet();
   var t = ensureTabs(ss);
@@ -216,7 +261,7 @@ function loadDoc(key) {
   var ss = getSheet();
   var t = ensureTabs(ss);
   var row = findRow(t.docs, key);
-  if (row < 0) return { ok: true, key: key, data: null, rev: '', updatedAt: '' };
+  if (row < 0) return { ok: true, key: key, data: null, rev: '', updatedAt: '', roster: readRoster(ss) };
 
   var json = readRowJson(t.docs, row, 4);
   var data = null;
@@ -225,7 +270,8 @@ function loadDoc(key) {
   return {
     ok: true, key: key, data: data,
     rev: String(head[1] || ''),
-    updatedAt: head[2] ? new Date(head[2]).toISOString() : ''
+    updatedAt: head[2] ? new Date(head[2]).toISOString() : '',
+    roster: readRoster(ss)
   };
 }
 
@@ -288,8 +334,46 @@ function saveDoc(body) {
     var logRows = t.log.getLastRow();
     if (logRows > LOG_KEEP + 1) t.log.deleteRows(2, logRows - LOG_KEEP - 1);
 
-    return { ok: true, rev: rev, updatedAt: now.toISOString(), bytes: json.length };
+    // 사람용 표 미러링 (실패해도 저장은 성공으로 둔다)
+    var mirrorInfo = null;
+    try { mirrorInfo = writeMirror(ss, body && body.mirror); } catch (merr) {
+      mirrorInfo = { ok: false, error: String((merr && merr.message) || merr) };
+    }
+
+    return { ok: true, rev: rev, updatedAt: now.toISOString(), bytes: json.length, mirror: mirrorInfo };
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * 앱이 보낸 평면 표([{tab, header, rows}])를 시트 탭에 그대로 씁니다.
+ * 탭이 없으면 만들고, 있으면 내용만 전부 교체합니다(서식·고정행은 유지).
+ */
+function writeMirror(ss, tables) {
+  if (!tables || !tables.length) return { ok: true, skipped: true };
+  var written = {};
+  tables.forEach(function (t) {
+    if (!t || !t.tab) return;
+    var header = t.header || [];
+    var rows = (t.rows || []).slice(0, MAX_MIRROR_ROWS);
+    var width = Math.max(header.length, 1);
+    var sh = ss.getSheetByName(t.tab);
+    if (!sh) sh = ss.insertSheet(t.tab);
+    sh.clear();
+    if (header.length) {
+      sh.getRange(1, 1, 1, header.length).setValues([header]);
+      sh.setFrozenRows(1);
+    }
+    if (rows.length) {
+      var norm = rows.map(function (r) {
+        var line = [];
+        for (var i = 0; i < width; i++) line.push(r && r[i] != null ? String(r[i]) : '');
+        return line;
+      });
+      sh.getRange(2, 1, norm.length, width).setValues(norm);
+    }
+    written[t.tab] = rows.length;
+  });
+  return { ok: true, rows: written };
 }
