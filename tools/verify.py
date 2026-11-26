@@ -155,6 +155,7 @@ def run(width, height, tag, shots=True):
         page.wait_for_timeout(450)
         page.fill("#f-title", "급식 메뉴 관련 반복 문의")
         page.fill("#f-memo", "1반 학부모가 2회 전화. 학교 기준 안내 후 추가 요구 없음.")
+        page.fill("#f-next", "11/28 2차 답변 예정")
         page.select_option("#f-urgency", "높음")
         page.select_option("#f-report", "보고 필요")
         if shots:
@@ -164,6 +165,7 @@ def run(width, height, tag, shots=True):
         body = page.inner_text("body")
         check("급식 메뉴 관련" in body, "트래커 카드 저장")
         check("보고 필요" in body, "보고 필요 뱃지")
+        check("11/28 2차 답변" in body, "후속조치 표시")
         if shots:
             page.screenshot(path=f"{OUT}/{tag}-12-tracker-filled.png")
         page.click('[data-a="t-filter"][data-k="report"]')

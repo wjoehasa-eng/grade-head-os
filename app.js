@@ -788,6 +788,7 @@
       '</div>' +
       '<div class="case-title">' + esc(t.title || '(제목 없음)') + '</div>' +
       (t.memo ? '<div class="case-memo">' + esc(t.memo) + '</div>' : '') +
+      (t.next ? '<div style="font-size:13px;color:#1B64DA;font-weight:700;margin-top:5px">→ ' + esc(t.next) + '</div>' : '') +
       '<div class="case-meta"><span>' + esc(t.status) + '</span><span class="sep"></span><span>' + fmtDate(t.date) + '</span></div>' +
       '</button>';
   }
@@ -888,7 +889,8 @@
         '<div class="field"><label>보고</label><select class="select" id="f-report">' + opts(D.tracker.report, t.report) + '</select></div>' +
         '<div class="field"><label>상태</label><select class="select" id="f-status">' + opts(D.tracker.status, t.status) + '</select></div>' +
         '</div>' +
-        '<div class="field"><label>내용·후속조치</label><textarea class="textarea" id="f-memo" placeholder="무슨 일이 있었고, 지금까지 무엇을 했는지. 사실만.">' + esc(t.memo) + '</textarea></div>' +
+        '<div class="field"><label>내용</label><textarea class="textarea" id="f-memo" placeholder="무슨 일이 있었고, 지금까지 무엇을 했는지. 사실만.">' + esc(t.memo) + '</textarea></div>' +
+        '<div class="field"><label>후속조치·다음 할 일</label><textarea class="textarea" id="f-next" style="min-height:70px" placeholder="예: 11/28 학부모 2차 답변 / 담임에게 사실 확인 후 종결">' + esc(t.next || '') + '</textarea></div>' +
         '<div class="hint-box"><span>🔒</span><span>학생·학부모 실명은 가급적 쓰지 마세요. “1반 학부모 A”처럼 남기면 충분합니다.</span></div>',
       foot: (isNew ? '' : '<button class="btn danger-text" data-a="del-case" data-id="' + t.id + '">' + icon('trash') + '</button>') +
         '<button class="btn line" data-a="close-sheet">취소</button>' +
@@ -911,6 +913,7 @@
       status: $('#f-status').value,
       title: $('#f-title').value.trim(),
       memo: $('#f-memo').value.trim(),
+      next: $('#f-next').value.trim(),
       updatedAt: now
     };
     if (!data.title) { toast('제목을 적어 주세요'); return; }
