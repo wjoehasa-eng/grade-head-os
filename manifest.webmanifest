@@ -1,0 +1,24 @@
+{
+  "name": "학년부장 OS — 12학급 운영 시스템",
+  "short_name": "학년부장 OS",
+  "description": "판단 브레이크, 1년 선제 레이더, 보고선, 민원·휴직 트래커, 회고 기록.",
+  "lang": "ko",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F2F4F6",
+  "theme_color": "#F2F4F6",
+  "categories": ["productivity", "education"],
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-192-maskable.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "./icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "3초 판단", "url": "./#today" },
+    { "name": "12개 반 트래커", "url": "./#respond" }
+  ]
+}
