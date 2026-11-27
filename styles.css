@@ -596,6 +596,75 @@ a { color: inherit; text-decoration: none; }
 }
 .grade-note p { margin: 0; font-size: 13.5px; line-height: 1.6; color: #4C3FBF; word-break: keep-all; }
 
+/* ---------------------------------------------- 단톡방 실제 고민 (v3) */
+.voice {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.voice:last-child { border-bottom: 0; padding-bottom: 0; }
+.voice:first-child { padding-top: 2px; }
+.vtag {
+  display: inline-block;
+  font-size: 11px; font-weight: 800;
+  color: var(--blue-deep); background: var(--blue-weak);
+  border-radius: 999px; padding: 3px 9px;
+  margin-bottom: 7px;
+}
+.vq {
+  font-size: 14.5px; font-weight: 800; letter-spacing: -0.02em;
+  line-height: 1.5; color: var(--ink); word-break: keep-all;
+}
+.vq::before { content: '“'; }
+.vq::after { content: '”'; }
+.va {
+  margin-top: 8px;
+  background: var(--line-2);
+  border-radius: 13px;
+  padding: 11px 13px;
+  font-size: 13.5px; line-height: 1.6; color: var(--ink-2);
+  word-break: keep-all;
+}
+.va-k {
+  display: inline-block;
+  font-size: 11px; font-weight: 900; color: var(--green);
+  background: var(--green-weak); border-radius: 6px;
+  padding: 1px 6px; margin-right: 6px;
+}
+.voice-home { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line-2); border-bottom: 0; }
+.report-note {
+  margin-top: 14px;
+  background: var(--amber-weak);
+  border-radius: 14px;
+  padding: 13px 15px;
+}
+.report-note .rn-k { font-size: 11.5px; font-weight: 900; color: var(--amber); letter-spacing: -0.01em; }
+.report-note p { margin: 5px 0 0; font-size: 13.5px; line-height: 1.6; color: #7A4A00; word-break: keep-all; }
+
+.month-hero .mh-route {
+  display: flex; gap: 8px; align-items: flex-start;
+  margin-top: 14px;
+  background: rgba(255,255,255,.14);
+  border-radius: 13px;
+  padding: 10px 13px;
+  font-size: 13px; font-weight: 700; line-height: 1.5;
+  color: #fff;
+  word-break: keep-all;
+}
+.month-hero .mh-route .dot {
+  flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%;
+  background: #9BE7C4; margin-top: 7px;
+}
+
+.scope-row { display: block; margin-top: 6px; }
+.scope-chip {
+  display: inline-block;
+  font-size: 10.5px; font-weight: 800; letter-spacing: -0.01em;
+  border-radius: 999px; padding: 2px 8px;
+}
+.scope-chip.gray { color: var(--sub); background: var(--line-2); }
+.scope-chip.blue { color: var(--blue-deep); background: var(--blue-weak); }
+.scope-chip.violet { color: #4C3FBF; background: var(--violet-weak); }
+
 /* ------------------------------------------------------------------ segmented */
 .segmented {
   display: grid;

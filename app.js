@@ -39,6 +39,7 @@
   var route = 'today';
   var radarMonth = NOW.getMonth() + 1;
   var respondTab = 'protocol';
+  var protocolFilter = 'all';
   var trackerFilter = { status: 'all', reportOnly: false, type: 'all' };
   var logScope = 'current';
   var logQuery = '';
@@ -46,7 +47,7 @@
   var pulledOnce = false;   /* 시트에서 한 번이라도 불러왔는가 — 불러오기 전 저장을 막는다 */
   var saveTimer = null;
 
-  var MONTH_TAG = { 2: '준비', 3: '학기초', 4: '현장', 5: '행사', 6: '평가', 7: '마무리', 8: '세팅', 9: '2학기', 10: '나눔', 11: '마감', 12: '인계', 1: '정리' };
+  var MONTH_TAG = { 2: '준비', 3: '학기초', 4: '현장', 5: '행사', 6: '평가', 7: '마무리', 8: '세팅', 9: '2학기', 10: '기록', 11: '마감', 12: '인계', 1: '정리' };
 
   /* ------------------------------------------------------------- 유틸 */
   function $(sel, root) { return (root || document).querySelector(sel); }
@@ -162,7 +163,10 @@
       checks: (src.checks || []).map(function (t, i) { return { id: m + '-' + i, t: t }; }),
       traps: (src.traps || []).map(function (t) { return { t: t.t, d: t.d }; }),
       me: (src.me || []).slice(),
-      points: { '1': '', '2': '', '3': src.g3 || '', '4': src.g4 || '', '5': '', '6': '' },
+      route: src.route || '',
+      report: src.report || '',
+      voices: (src.voices || []).slice(),
+      points: { '1': '', '2': '', '3': src.g3 || '', '4': src.g4 || '', '5': src.g5 || '', '6': src.g6 || '' },
       memo: '', links: [], editedAt: 0
     };
     _defMonth[m] = dm;
@@ -182,6 +186,9 @@
       checks: Array.isArray(ov.checks) ? ov.checks : base.checks,
       traps: Array.isArray(ov.traps) ? ov.traps : base.traps,
       me: Array.isArray(ov.me) ? ov.me : base.me,
+      route: base.route,
+      report: base.report,
+      voices: base.voices,
       points: Object.assign({}, base.points, ov.points || {}),
       memo: ov.memo || '',
       links: Array.isArray(ov.links) ? ov.links : [],
@@ -209,6 +216,26 @@
   function ensureProtocols() {
     if (!Y().protocols) {
       Y().protocols = clone(D.protocols).map(function (p) { p.links = p.links || []; p.memo = p.memo || ''; return p; });
+    } else {
+      var have = {};
+      Y().protocols.forEach(function (p) { if (p && p.id) have[p.id] = 1; });
+      var defs = {};
+      D.protocols.forEach(function (p) { defs[p.id] = p; });
+      var added = false;
+      Y().protocols.forEach(function (p) {
+        if (p && p.id && p.scope == null && defs[p.id] && defs[p.id].scope) {
+          p.scope = defs[p.id].scope; added = true;
+        }
+      });
+      D.protocols.forEach(function (p) {
+        if (!have[p.id]) {
+          var c = clone(p);
+          c.links = []; c.memo = '';
+          Y().protocols.push(c);
+          added = true;
+        }
+      });
+      if (added) Y().updatedAt = Date.now();
     }
     return Y().protocols;
   }
@@ -481,6 +508,11 @@
           radar.rows.push([y, who, m + '월', '체크리스트', c.t, checkOnY(y, yv.grade, c.id) ? 'O' : '', lk]);
         });
         (d.traps || []).forEach(function (t) { radar.rows.push([y, who, m + '월', '지뢰', t.t + ' — ' + t.d, '', lk]); });
+        if (d.route) radar.rows.push([y, who, m + '월', '판단방식', d.route, '', lk]);
+        (d.voices || []).forEach(function (v) {
+          radar.rows.push([y, who, m + '월', '실제고민', (v.tag ? '[' + v.tag + '] ' : '') + v.q + ' — ' + v.a, '', lk]);
+        });
+        if (d.report) radar.rows.push([y, who, m + '월', '보고타이밍', d.report, '', lk]);
         radar.rows.push([y, who, m + '월', '공지초안', d.notice || '', '', lk]);
         (d.now || []).forEach(function (t) { radar.rows.push([y, who, m + '월', '할일', t, '', lk]); });
         (d.me || []).forEach(function (t) { radar.rows.push([y, who, m + '월', '할일', t, '', lk]); });
@@ -1245,6 +1277,11 @@
       '<p class="card-note">이번 달 동학년 체크리스트 진행률입니다.</p>' +
       '<div class="btn-row"><button class="btn small line" data-a="nav" data-r="radar">레이더 열기</button>' +
       '<button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(noticeOf(md, yv.grade)) + '">' + icon('copy') + ' 공지 복사</button></div>' +
+      (md.voices && md.voices.length ? '<div class="voice voice-home">' +
+        '<span class="vtag">' + esc(md.voices[0].tag || '단톡방') + '</span>' +
+        '<div class="vq">' + esc(md.voices[0].q) + '</div>' +
+        '<div class="va"><span class="va-k">베테랑 답</span>' + esc(md.voices[0].a) + '</div>' +
+        '<button class="mini-link" style="margin-top:6px" data-a="nav" data-r="radar">이 달 고민 더 보기</button></div>' : '') +
       '</section>' +
 
       '</div><div class="col">' +
@@ -1350,6 +1387,7 @@
       '</div>' +
       '<h2>' + esc(d.title) + '</h2>' +
       '<p>' + esc(d.lead) + '</p>' +
+      (d.route ? '<div class="mh-route"><span class="dot"></span><span>' + esc(d.route) + '</span></div>' : '') +
       '<div class="now-list">' +
       d.now.map(function (t, i) {
         return '<div class="now-item"><span class="num">' + (i + 1) + '</span><span>' + esc(t) + '</span></div>';
@@ -1358,6 +1396,18 @@
       '</div>' +
 
       '<section class="card" style="margin-top:14px" id="checks-card">' + checksCardHTML() + '</section>' +
+
+      (d.voices && d.voices.length ? '<section class="card">' +
+        '<div class="card-head"><span class="card-cap">단톡방에서 실제로 나온 고민</span></div>' +
+        '<h2 class="card-title" style="margin-bottom:4px">부장들이 실제로 막힌 지점</h2>' +
+        '<p class="card-note" style="margin-top:0;margin-bottom:6px">전국 학년·교무·생활인성·안전 단톡방(2026년)에서 반복된 질문을 익명·일반화했습니다. 학년에 따라 다른 항목은 태그로 표시했습니다.</p>' +
+        d.voices.map(function (v) {
+          return '<div class="voice">' +
+            (v.tag ? '<span class="vtag">' + esc(v.tag) + '</span>' : '') +
+            '<div class="vq">' + esc(v.q) + '</div>' +
+            '<div class="va"><span class="va-k">베테랑 답</span>' + esc(v.a) + '</div></div>';
+        }).join('') +
+        '</section>' : '') +
 
       '<section class="card">' +
       '<div class="card-head"><span class="card-cap">공지 초안</span><span class="topbar-spacer"></span>' +
@@ -1381,6 +1431,7 @@
       '<div class="card-head"><h2 class="card-title">부장이 직접 챙길 일</h2><span class="topbar-spacer"></span>' +
       '<button class="mini-link" data-a="radar-edit" data-m="' + m + '">' + icon('pencil') + ' 고치기</button></div>' +
       (d.me.length ? '<ul class="plain-list">' + d.me.map(function (t) { return '<li><span class="b"></span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' : '<p class="card-note">비어 있습니다. 편집에서 추가해 보세요.</p>') +
+      (d.report ? '<div class="report-note"><div class="rn-k">보고 · 행정실 타이밍</div><p>' + esc(d.report) + '</p></div>' : '') +
       (point ? '<div class="grade-note"><div class="g">' + g + '학년</div><p>' + esc(point) + '</p></div>' : '') +
       '</section>' +
 
@@ -1664,22 +1715,42 @@
   }
 
   function protocolList() {
+    if (Y().protocols) ensureProtocols();
     var list = protocolsData();
-    return '<div class="btn-row" style="margin-top:0;margin-bottom:12px">' +
+    var groups = ['all', '공통', '기능부장', '학년 참고'];
+    var shown = list.filter(function (p) { return protocolFilter === 'all' || scopeGroup(p) === protocolFilter; });
+    return '<div class="btn-row" style="margin-top:0;margin-bottom:10px">' +
       '<button class="btn line small" data-a="edit-protocol-list">' + icon('pencil') + ' 프로토콜 고치기</button>' +
       '<button class="btn line small" data-a="new-protocol">' + icon('plus') + ' 새 프로토콜</button></div>' +
+      '<div class="filter-row" style="margin-bottom:14px">' +
+      groups.map(function (s) {
+        return '<button class="chip ' + (protocolFilter === s ? 'active' : '') + '" data-a="p-filter" data-v="' + s + '">' + (s === 'all' ? '전체' : s) + '</button>';
+      }).join('') +
+      '</div>' +
       '<div class="protocol-grid">' +
-      list.map(function (p) {
+      shown.map(function (p) {
         return '<button class="pcard" data-a="protocol" data-id="' + esc(p.id) + '">' +
           '<span class="emo">' + esc(p.emoji || '📌') + '</span>' +
           '<span style="flex:1;min-width:0"><span class="pt" style="display:block">' + esc(p.title) + '</span>' +
           '<span class="pw" style="display:block">' + esc(p.when) + '</span>' +
+          '<span class="scope-row"><span class="scope-chip ' + scopeTone(p) + '">' + esc(p.scope || '공통') + '</span></span>' +
           ((p.links || []).filter(function (l) { return safeUrl(l.u); }).length ? '<span class="pw" style="display:block;color:#1B64DA">🔗 링크 ' + p.links.length + '개</span>' : '') +
           '</span>' +
           '<span class="arrow">' + icon('chevron') + '</span></button>';
       }).join('') +
       '</div>' +
-      '<p class="foot-note">상황이 애매하면 홈의 3초 판단부터. 답을 정하는 문제인지, 시간을 버는 문제인지 먼저 나눕니다.</p>';
+      '<p class="foot-note">공통은 학년부장·기능부장 모두에게 해당되는 실무입니다. 학년 참고는 해당 학년에서만 나오는 일입니다. 상황이 애매하면 홈의 3초 판단부터.</p>';
+  }
+
+  function scopeGroup(p) {
+    var s = String(p.scope || '공통');
+    if (s.indexOf('학년') === 0) return '학년 참고';
+    if (s.indexOf('기능') === 0) return '기능부장';
+    return '공통';
+  }
+  function scopeTone(p) {
+    var g = scopeGroup(p);
+    return g === '학년 참고' ? 'violet' : (g === '기능부장' ? 'blue' : 'gray');
   }
 
   function trackerView() {
@@ -2494,6 +2565,7 @@
       return;
     }
     if (a === 'respond-tab') { respondTab = el.dataset.t; render(); return; }
+    if (a === 'p-filter') { protocolFilter = el.dataset.v; render(); return; }
     if (a === 'protocol') { protocolSheet(el.dataset.id); return; }
     if (a === 'open-case') { openCase(null); return; }
     if (a === 'open-case-from-protocol') {
