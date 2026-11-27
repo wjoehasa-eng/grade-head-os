@@ -7,7 +7,7 @@
 
   var D = GH.data;
   var LS_KEY = 'grade-head-os.v1';
-  var APP_VERSION = '2.0.0';
+  var APP_VERSION = '2.0.1';
 
   /* 학년도는 3월에 시작합니다 (1~2월은 지난 학년도). */
   var NOW = new Date();
@@ -43,6 +43,7 @@
   var logScope = 'current';
   var logQuery = '';
   var syncing = false;
+  var pulledOnce = false;   /* 시트에서 한 번이라도 불러왔는가 — 불러오기 전 저장을 막는다 */
   var saveTimer = null;
 
   var MONTH_TAG = { 2: '준비', 3: '학기초', 4: '현장', 5: '행사', 6: '평가', 7: '마무리', 8: '세팅', 9: '2학기', 10: '나눔', 11: '마감', 12: '인계', 1: '정리' };
@@ -697,7 +698,9 @@
         '<button class="btn line block" style="margin-top:8px" data-a="csv-retro">판단_기록.csv · ' + t.retro.rows.length + '줄</button>' +
         '<p class="card-note">UTF-8 BOM을 넣어 한글이 깨지지 않습니다. 구글 시트 · 엑셀에서 바로 열립니다.</p></div>' +
         '<div class="field"><label>③ 백업</label>' +
-        '<button class="btn line block" data-a="export">JSON 백업 (전체 학년도)</button></div>' +
+        '<button class="btn line block" data-a="export">JSON 백업 (전체 학년도)</button>' +
+        '<button class="btn line block" style="margin-top:8px" data-a="import">JSON 백업 불러오기</button>' +
+        '<p class="card-note">백업 파일을 불러오면 이 기기의 기록을 그 파일 내용으로 바꿉니다(연결된 시트에도 반영).</p></div>' +
         '<div class="hint-box"><span>📄</span><span>비공개 시트의 <b>레이더_정리 · 사안_트래커 · 판단_기록</b> 탭도 앱이 저장할 때마다 같은 내용으로 채워집니다.</span></div>',
       foot: '<button class="btn line" data-a="close-sheet">닫기</button>'
     });
@@ -869,8 +872,13 @@
     el.title = label || map[mode] || map.off;
   }
 
-  function pushState() {
+  function pushState(force) {
     if (!db.url || syncing) return;
+    /* 데이터 증발 방지: 시트에서 한 번도 읽지 못한 상태(새 기기·첫 연결)에서는 먼저 불러온다. */
+    if (!pulledOnce && !force) {
+      pullState(true).then(function () { if (pulledOnce) pushState(true); }).catch(function () {});
+      return;
+    }
     syncing = true;
     setSync('busy');
     var baseRev = db.rev;
@@ -914,6 +922,7 @@
       if (!r || !r.ok) { setSync('warn'); return; }
       var remote = r.data;
       db.rev = r.rev || db.rev;
+      pulledOnce = true;
       var remoteHasData = remote && typeof remote === 'object' && Object.keys(remote).length > 0;
       if (remoteHasData) {
         if (merge) {
@@ -2685,6 +2694,31 @@
       return;
     }
     if (a === 'export') { exportJSON(); return; }
+    if (a === 'import') {
+      var inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = '.json,application/json';
+      inp.onchange = function () {
+        var f = inp.files && inp.files[0];
+        if (!f) return;
+        var rd = new FileReader();
+        rd.onload = function () {
+          try {
+            var obj = JSON.parse(String(rd.result));
+            var st = (obj && obj.years) ? obj : (obj && obj.state ? obj.state : null);
+            if (!st || !st.years) throw new Error('학년부장 OS 백업 파일이 아닙니다.');
+            var okGo = confirm('백업 파일의 기록으로 이 기기의 기록을 바꿀까요?\n지금 기록은 사라집니다.' + (db.url ? '\n\n연결된 시트에도 이 내용이 저장됩니다.' : ''));
+            if (!okGo) return;
+            db.state = normalize(st);
+            persist(); render();
+            if (db.url) pushState(true);
+            toast('백업을 불러왔어요');
+          } catch (err) { toast('가져오지 못했어요 — ' + (err && err.message ? err.message : '')); }
+        };
+        rd.readAsText(f);
+      };
+      inp.click();
+      return;
+    }
     if (a === 'reset') {
       if (!confirm('이 기기의 기록을 모두 지웁니다. 시트에 저장된 내용은 남습니다. 계속할까요?')) return;
       localStorage.removeItem(LS_KEY);
@@ -2759,8 +2793,15 @@
     render();
     if (db.url) {
       setSync('busy', '불러오는 중');
-      pullState(hasLocalData).catch(function () { setSync('warn', '연결 실패 · 기기에 저장'); });
+      if (window.LoadGate && hasLocalData) LoadGate.done();   /* 이 기기에 내 기록이 있으면 바로 보여 준다 */
+      pullState(hasLocalData).then(function () {
+        if (window.LoadGate) LoadGate.done();
+      }).catch(function () {
+        if (window.LoadGate) LoadGate.done();
+        setSync('warn', '연결 실패 · 기기에 저장');
+      });
     } else {
+      if (window.LoadGate) LoadGate.done();
       setSync('off');
     }
     if ('serviceWorker' in navigator) {
