@@ -105,7 +105,7 @@ def run(width, height, tag, shots=True):
         check(page.locator('[data-a="grade"]').count() == 6, "1~6학년 6개 선택")
         page.click('[data-a="month"][data-m="11"]')
         page.wait_for_timeout(300)
-        check("평가 마감" in page.inner_text(".month-hero"), "11월 전환")
+        check("11월" in page.inner_text(".month-hero") and len(page.inner_text(".month-hero h2")) > 2, "11월 전환")
         page.click('[data-a="check"]')
         page.wait_for_timeout(250)
         check("1/" in page.inner_text("#checks-card"), "체크 진행률 1/N")
@@ -174,7 +174,7 @@ def run(width, height, tag, shots=True):
         page.wait_for_timeout(350)
         page.click('[data-a="radar-reset"]')
         page.wait_for_timeout(400)
-        check("평가 마감" in page.inner_text(".month-hero") and "내가 고친" not in page.inner_text(".month-hero"),
+        check("11월" in page.inner_text(".month-hero") and len(page.inner_text(".month-hero h2")) > 2 and "내가 고친" not in page.inner_text(".month-hero"),
               "기본값 복원")
         page.click('[data-a="year-step"][data-d="-1"]')
         page.wait_for_timeout(400)
