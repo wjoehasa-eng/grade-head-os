@@ -2390,7 +2390,8 @@
         '<input class="input" id="s-url" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(db.url) + '">' +
         '<p class="card-note">SETUP.md 순서대로 배포하면 주소가 나옵니다. 주소를 아는 사람만 내 데이터에 접근할 수 있으니 공유하지 마세요.</p></div>' +
         '<div class="btn-row"><button class="btn line small" data-a="test-conn">연결 확인</button>' +
-        '<button class="btn primary small" data-a="save-url">저장</button></div>' +
+        '<button class="btn primary small" data-a="save-url">저장</button>' +
+        '<button class="btn line small" data-a="copy-link">이 페이지 링크 복사</button></div>' +
         (db.url ? '<p class="card-note">연결되면 시트의 <b>명단</b> 탭도 함께 읽어 옵니다.</p>' : '') +
         '<div class="divider"></div>' +
         '<div class="kv"><span class="k">저장 위치</span><span class="v">' + (db.url ? '내 구글 시트 + 이 기기' : '이 기기만') + '</span></div>' +
@@ -2662,6 +2663,14 @@
       }).catch(function () { toast('연결 실패 — 주소와 배포 권한을 확인하세요'); db.url = old; });
       return;
     }
+    if (a === 'copy-link') {
+      if (!db.url) { toast('주소를 먼저 저장해 주세요'); return; }
+      var link;
+      try { link = location.origin + location.pathname + '#s=' + btoa(unescape(encodeURIComponent(db.url))); } catch (e) { toast('링크를 만들지 못했어요'); return; }
+      copyText(link);
+      toast('이 페이지 링크를 복사했어요 · 즐겨찾기에 넣어 두면 공용 PC에서도 한 번에 연결됩니다');
+      return;
+    }
     if (a === 'save-url') {
       var u2 = $('#s-url').value.trim();
       db.url = u2;
@@ -2738,7 +2747,11 @@
     loadLocal();
     try {
       var m = location.hash.match(/#s=([A-Za-z0-9_\-=+/]+)/);
-      if (m) { db.url = atob(m[1]); persist(); }
+      if (m) {
+        db.url = atob(m[1]);
+        persist();
+        try { history.replaceState(null, '', location.pathname + location.search); } catch (e2) { /* 무시 */ }
+      }
     } catch (e) { /* 무시 */ }
     radarMonth = new Date().getMonth() + 1;
 
