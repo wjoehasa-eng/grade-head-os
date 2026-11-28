@@ -8,7 +8,7 @@
 
   var D = GH.data;
   var LS_KEY = 'grade-head-os.v1';
-  var APP_VERSION = '4.0.2';
+  var APP_VERSION = '4.0.3';
 
   /* 학년도는 3월에 시작합니다 (1~2월은 지난 학년도). */
   var NOW = new Date();
@@ -237,6 +237,13 @@
       var defs = {};
       D.protocols.forEach(function (p) { defs[p.id] = p; });
       var added = false;
+      var legacy = Y().protocols.some(function (p) { return p && p.id && p.cv == null; });
+      if (legacy && !Y().protocolsV3Backup) {
+        /* v3에서 쓰던 내 프로토콜을 잃지 않도록, 교체 전에 내용만 따로 보관한다 */
+        Y().protocolsV3Backup = Y().protocols.map(function (p) {
+          return { id: p.id, title: p.title, steps: p.steps, avoid: p.avoid, lines: p.lines, record: p.record, memo: p.memo };
+        });
+      }
       Y().protocols.forEach(function (p) {
         var d = (p && p.id) ? defs[p.id] : null;
         if (!d) return;

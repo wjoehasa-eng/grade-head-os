@@ -1,12 +1,12 @@
 /* 학년부장 OS — service worker
    앱 껍데기만 캐시합니다. 데이터(비공개 시트)는 절대 캐시하지 않습니다. */
-var CACHE = 'grade-head-os-v4.0.3';
+var CACHE = 'grade-head-os-v4.0.4';
 var ASSETS = [
   './',
   './index.html',
-  './styles.css?v=4.0.2',
-  './data.js?v=4.0.2',
-  './app.js?v=4.0.2',
+  './styles.css?v=4.0.3',
+  './data.js?v=4.0.3',
+  './app.js?v=4.0.3',
   './manifest.webmanifest',
   './icon.svg',
   './icon-192.png',
