@@ -1,14 +1,16 @@
 /* =========================================================================
-   학년부장 OS — app (v4)
-   · 학년도(연도) 전환 · 레이더 직접 편집 · 명단(시트) 연동
-   · 6문항 3초 판단 · 판단 4축(보고·결정·순서표·효율화) · 기능부장 정석
+   학년부장 OS — app (v5)
+   · 한 화면 = 한 질문: 3초 판단 스텝 플로우(예/아니오 → 즉시 분기)
+   · 대응 40개 = 6개 주제 → 상세(순서·금기·수신자별 문장)
+   · 판단 = 성격 / 결재 순서(업무별 타임라인) / 보고·결정권 / 양식
+   · 화면 연결: 결론 → 프로토콜·순서표, 레이더 → 프로토콜, 부서 → 프로토콜
    ========================================================================= */
 (function () {
   'use strict';
 
   var D = GH.data;
   var LS_KEY = 'grade-head-os.v1';
-  var APP_VERSION = '4.0.3';
+  var APP_VERSION = '5.0.0';
 
   /* 학년도는 3월에 시작합니다 (1~2월은 지난 학년도). */
   var NOW = new Date();
@@ -406,7 +408,8 @@
     var own = linkOwner(kind, k1, k2);
     if (!own || !own.obj) { toast('먼저 저장해 주세요'); return; }
     currentLinks = { kind: kind, k1: k1, k2: k2 };
-    var rows = (own.obj.links || []).map(linkRowHTML).join('');
+    var links = (own.obj.links || []);
+    var rows = links.length ? links.map(linkRowHTML).join('') : linkRowHTML({ l: '', u: '' });
     openSheet({
       title: '🔗 링크',
       sub: own.title,
@@ -471,13 +474,12 @@
   /* ------------------------------------------------------------- 허브 */
   var HUB_TAGS = ['드라이브', '문서', '시트', '기타'];
   function hubList() { return (Y().hub || []).filter(function (h) { return h && safeUrl(h.url); }); }
-
   function hubCardHTML() {
-    var list = hubList().slice(0, 6);
+    var list = hubList().slice(0, 4);
     var collected = allLinks().length;
     return '<section class="card">' +
-      '<div class="card-head"><h2 class="card-title">문서·드라이브 허브</h2><span class="topbar-spacer"></span>' +
-      '<button class="mini-link" data-a="open-hub">정리</button></div>' +
+      '<div class="card-head"><h2 class="card-title">문서·드라이브</h2><span class="topbar-spacer"></span>' +
+      '<button class="mini-link" data-a="open-hub">모아보기' + (collected ? ' ' + collected : '') + '</button></div>' +
       (list.length ? '<div class="hub-list">' + list.map(function (h) {
         return '<a class="hub-item" href="' + esc(safeUrl(h.url)) + '" target="_blank" rel="noopener noreferrer">' +
           '<span class="hub-tag ' + hubTagClass(h.tag) + '">' + esc(h.tag || '기타') + '</span>' +
@@ -485,9 +487,8 @@
           (h.memo ? '<em>' + esc(h.memo) + '</em>' : '') + '</span>' +
           '<span class="hub-go">' + icon('chevron') + '</span></a>';
       }).join('') + '</div>' :
-        '<p class="card-note" style="margin-top:0">드라이브 폴더, 구글 문서·시트, 공문 주소를 여기에 모아 두면 한 번에 열 수 있습니다.</p>') +
-      '<div class="btn-row"><button class="btn small line" data-a="hub-add">' + icon('plus') + ' 바로가기</button>' +
-      '<button class="btn small line" data-a="open-hub">' + icon('users') + ' 모아보기' + (collected ? ' ' + collected : '') + '</button></div>' +
+        '<p class="card-sub">드라이브 폴더, 문서·시트, 공문 주소를 여기에 모아 두면 한 번에 열 수 있습니다.</p>') +
+      '<button class="row-add" data-a="hub-add">' + icon('plus') + ' 바로가기 추가</button>' +
       '</section>';
   }
 
@@ -1156,6 +1157,435 @@
     return 'draft';
   }
 
+  /* ------------------------------------------------------- v5: 화면 상태 */
+  var STEP_ORDER = ['report', 'decide', 'money', 'ground', 'all', 'time'];
+  var STEP = { a: {}, list: false, done: false };
+  var judgeSeg = 'shape';
+  var judgeWork = -1;
+  var reportTab = 'lines';
+  var reportLevel = 0;
+  var respondGroup = '';
+
+  var STEP_TEXT = {
+    report: { q: '안전·학폭·교권·민원·개인정보인가요?', hint: '하나라도 걸리면 내 판단으로 결론내지 않습니다' },
+    decide: { q: '관리자가 정할 일인가요?', hint: '인사·학사일정·예산·외부 대응은 관리자 결정' },
+    money: { q: '돈·계약·심의가 걸리나요?', hint: '예산·품의·견적·학운위·업체 계약' },
+    ground: { q: '내가 아는 확실한 근거가 있나요?', hint: '공문·규정·작년 결재본·담당자 확인 중 하나' },
+    all: { q: '12개 반(또는 전교)에 안내가 나가나요?', hint: '한 번 보내면 되돌리기 어렵습니다' },
+    time: { q: '오늘 안에 답이 꼭 필요한가요?', hint: '아니면 “확인해서 ○시까지”로 시간을 법니다' }
+  };
+
+  /* 결론 → 이어서 볼 곳 (화면 연결) */
+  var OUTCOME_LINKS = {
+    report: [{ a: 'protocol', id: 'p10', k: '프로토콜', t: '학폭·교권 접수 (첫 24시간)' },
+      { a: 'go-judge-seg', v: 'report', k: '판단', t: '보고선 기준' }],
+    ask: [{ a: 'protocol', id: 'p9', k: '프로토콜', t: '관리자 지시와 동학년 의견 충돌' },
+      { a: 'go-judge-seg', v: 'report', k: '판단', t: '결정권 기준' }],
+    route: [{ a: 'protocol', id: 'p23', k: '프로토콜', t: '예산·품의·행정실 연계' },
+      { a: 'go-judge-seg', v: 'order', k: '판단', t: '결재·품의 순서표' }],
+    hold: [{ a: 'protocol', id: 'p5', k: '프로토콜', t: '모르는 질문을 받았을 때' },
+      { a: 'go-judge-seg', v: 'forms', k: '판단', t: '공지·회의 양식' }],
+    draft: [{ a: 'protocol', id: 'p26', k: '프로토콜', t: '수합·공지 효율화' },
+      { a: 'go-judge-seg', v: 'order', k: '판단', t: '결재·품의 순서표' }]
+  };
+
+  /* 이 달에 꺼내 쓸 프로토콜 */
+  var MONTH_PROTOS = {
+    2: ['p21', 'p33', 'p16'], 3: ['p20', 'p26', 'p5'], 4: ['p13', 'p12', 'p27'],
+    5: ['p20', 'p27', 'p12'], 6: ['p29', 'p26', 'p16'], 7: ['p29', 'p16', 'p32'],
+    8: ['p33', 'p34', 'p38'], 9: ['p24', 'p35', 'p19'], 10: ['p16', 'p28', 'p29'],
+    11: ['p29', 'p34', 'p16'], 12: ['p28', 'p32', 'p19'], 1: ['p32', 'p33', 'p28']
+  };
+
+  /* 부서 → 프로토콜 */
+  var DESK_PROTOS = {
+    gyomu: ['p14', 'p16', 'p22'], yeongu: ['p24', 'p19'], jeongbo: ['p34', 'p40'],
+    cheyuk: ['p35'], neulbom: ['p36'], gyogwaseo: ['p33'],
+    anjeon: ['p27', 'p38'], saenghwal: ['p10', 'p30', 'p39']
+  };
+
+  /* 결재 순서표 업무 → 프로토콜 */
+  var WORK_PROTOS = ['p23', 'p25', 'p13', 'p11', 'p15', 'p33', 'p16', 'p13', 'p28', 'p34', 'p38', 'p10'];
+
+  /* 대응 프로토콜 40개 주제 그룹 */
+  var PROTO_GROUPS = [
+    { k: 'team', name: '동학년·회의', emoji: '👥', desc: '분장·의견 조율·회의 운영' },
+    { k: 'parent', name: '학부모·민원', emoji: '📩', desc: '민원·상담·반복 연락' },
+    { k: 'admin', name: '결재·예산·행정실', emoji: '🧾', desc: '품의·계약·학운위·행정실' },
+    { k: 'safety', name: '학폭·교권·안전', emoji: '🚨', desc: '사안 접수·안전사고·교권' },
+    { k: 'dept', name: '부서·학기말', emoji: '🏛', desc: '교과서·체육·늘봄·결산' },
+    { k: 'record', name: '기록·인수인계', emoji: '🗂', desc: '생기부·휴직·문서 남기기' }
+  ];
+
+  var PROTO_GROUP_OF = {
+    p1: 'team', p2: 'team', p5: 'team', p6: 'team', p8: 'team', p9: 'team', p17: 'team', p21: 'team', p26: 'team',
+    p3: 'parent', p7: 'parent', p18: 'parent', p20: 'parent', p31: 'parent',
+    p14: 'admin', p19: 'admin', p22: 'admin', p23: 'admin', p24: 'admin', p25: 'admin', p28: 'admin',
+    p10: 'safety', p12: 'safety', p27: 'safety', p30: 'safety', p38: 'safety',
+    p11: 'dept', p13: 'dept', p15: 'dept', p16: 'dept', p33: 'dept', p34: 'dept', p35: 'dept',
+    p36: 'dept', p37: 'dept', p39: 'dept', p40: 'dept',
+    p4: 'record', p29: 'record', p32: 'record'
+  };
+
+  function groupOf(p) {
+    return PROTO_GROUP_OF[p.id] || (scopeGroup(p) === '기능부장' ? 'dept' : scopeGroup(p) === '학년 참고' ? 'team' : 'team');
+  }
+  function groupDef(k) {
+    return PROTO_GROUPS.filter(function (x) { return x.k === k; })[0] || PROTO_GROUPS[0];
+  }
+
+  function pageHead(eyebrow, title, sub) {
+    return '<header class="page-head">' +
+      '<p class="eyebrow">' + eyebrow + '</p>' +
+      '<h1 class="page-title">' + title + '</h1>' +
+      (sub ? '<p class="page-sub">' + sub + '</p>' : '') +
+      '</header>';
+  }
+
+  function nextRow(a, id, v, k, t) {
+    return '<button class="next-row" data-a="' + a + '"' +
+      (id ? ' data-id="' + esc(id) + '"' : '') + (v ? ' data-v="' + esc(v) + '"' : '') + '>' +
+      '<span class="next-k">' + esc(k) + '</span>' +
+      '<span class="next-t">' + esc(t) + '</span>' +
+      '<span class="next-a">' + icon('chevron') + '</span></button>';
+  }
+
+  function accHTML(title, sub, body) {
+    return '<details class="acc"><summary><span class="acc-t"><b>' + esc(title) + '</b>' +
+      (sub ? '<em>' + esc(sub) + '</em>' : '') + '</span><span class="acc-a">' + icon('down') + '</span></summary>' +
+      '<div class="acc-body">' + body + '</div></details>';
+  }
+
+  function copyWide(text, label) {
+    return '<button class="copy-wide" data-a="copy" data-copy="' + encodeURIComponent(text) + '">' +
+      icon('copy') + (label || '복사') + '</button>';
+  }
+
+  function stepAnsweredCount() {
+    return STEP_ORDER.filter(function (k) { return STEP.a[k] !== undefined; }).length;
+  }
+
+  function stepNextKey() {
+    for (var i = 0; i < STEP_ORDER.length; i++) {
+      if (STEP.a[STEP_ORDER[i]] === undefined) return STEP_ORDER[i];
+    }
+    return null;
+  }
+
+  function stepFinished(k, v) {
+    if (k === 'report' || k === 'decide' || k === 'money' || k === 'all') return !!v;
+    if (k === 'ground') return v === 0;      /* 근거 없음 → 즉답 금지로 분기 */
+    if (k === 'time') return true;           /* 마지막 질문은 항상 결론 */
+    return false;
+  }
+
+  function stepOutcome() {
+    var a = STEP.a;
+    if (a.report) return 'report';
+    if (a.decide) return 'ask';
+    if (a.money) return 'route';
+    if (a.ground === 0 || a.all || a.time === 0) return 'hold';
+    return 'draft';
+  }
+
+  function currentOutcomeKey() {
+    return STEP_ORDER.some(function (k) { return STEP.a[k] !== undefined; }) ? stepOutcome() : verdictKey();
+  }
+
+
+  function flowHTML() {
+    if (STEP.list) return flowListHTML();
+    var k = stepNextKey();
+    if (STEP.done || !k) { STEP.done = true; return resultHTML(stepOutcome()); }
+    var t = STEP_TEXT[k];
+    var n = stepAnsweredCount();
+    return '<section class="flow" id="flow-card">' +
+      '<div class="flow-top"><span class="flow-cap">3초 판단 브레이크</span>' +
+      '<span class="flow-count">' + (n + 1) + ' / 6</span></div>' +
+      '<div class="flow-bars">' + STEP_ORDER.map(function (kk, i) {
+        return '<i class="' + (STEP.a[kk] !== undefined ? 'on' : (i === n ? 'cur' : '')) + '"></i>';
+      }).join('') + '</div>' +
+      '<p class="flow-q">' + esc(t.q) + '</p>' +
+      '<p class="flow-hint">' + esc(t.hint) + '</p>' +
+      '<div class="flow-btns">' +
+      '<button class="flow-btn no" data-a="step-ans" data-v="0">아니요</button>' +
+      '<button class="flow-btn yes" data-a="step-ans" data-v="1">예</button>' +
+      '</div>' +
+      '<button class="flow-list" data-a="step-list">전체 6문항 한눈에 보기</button>' +
+      '</section>';
+  }
+
+
+  function flowListHTML() {
+    return '<section class="flow" id="flow-card">' +
+      '<div class="flow-top"><span class="flow-cap">전체 6문항</span>' +
+      '<button class="mini-link" data-a="step-list">스텝으로 보기</button></div>' +
+      '<p class="flow-hint" style="margin:8px 0 14px">해당하는 항목을 켜면 결론이 바로 바뀝니다.</p>' +
+      '<div class="qlist">' + qRowsHTML() + '</div>' +
+      '<div id="verdict-wrap" class="list-verdict">' + listVerdictHTML() + '</div>' +
+      '</section>';
+  }
+
+
+  function listVerdictHTML() {
+    var any = STEP_ORDER.some(function (k) { return !!Q[k]; });
+    if (!any) {
+      return '<p class="result-empty" style="margin-top:18px">아직 판단 전<span>위 6개 중 하나라도 켜면 결론이 나옵니다.</span></p>';
+    }
+    return resultHTML(verdictKey(), true);
+  }
+
+
+  function resultHTML(key, compact) {
+    var o = D.quick.outcomes[key];
+    var time = timeLabel(to24(defaultTime()));
+    var msg = o.msg.replace('{time}', time);
+    var links = OUTCOME_LINKS[key] || [];
+    return '<div class="result ' + o.tone + (compact ? ' compact' : '') + '">' +
+      '<div class="flow-top"><p class="result-cap">결론</p>' +
+      '<button class="mini-link" data-a="step-restart">다시 판단</button></div>' +
+      '<h2 class="result-title">' + esc(o.title) + '</h2>' +
+      '<p class="result-sub">' + esc(o.sub) + '</p>' +
+      '<div class="todo"><p class="sec-label">지금 할 일</p>' +
+      '<ol class="vtl">' + o.steps.map(function (s, i) {
+        return '<li><span class="vtl-n">' + (i + 1) + '</span><span class="vtl-t">' + esc(s) + '</span></li>';
+      }).join('') + '</ol></div>' +
+      '<div class="msg"><div class="msg-head"><span class="msg-cap">그대로 보낼 문장</span>' +
+      '<label class="time-pick"><input type="time" id="time-input" value="' + to24(defaultTime()) + '"></label></div>' +
+      '<p class="mtext">' + esc(msg) + '</p>' +
+      copyWide(msg) + '</div>' +
+      (o.case ? '<div class="case-note"><span>현장 사례</span><p>' + esc(o.case) + '</p></div>' : '') +
+      '<details class="acc"><summary><span class="acc-t"><b>왜 이 결론인가</b></span>' +
+      '<span class="acc-a">' + icon('down') + '</span></summary>' +
+      '<div class="acc-body"><ul class="why">' + o.why.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul></div></details>' +
+      '<div class="next"><p class="sec-label">이어서</p>' +
+      links.map(function (l) { return nextRow(l.a, l.id, l.v, l.k, l.t); }).join('') + '</div>' +
+      (compact ? '' : '<div class="result-foot"><button class="ghost-btn" data-a="verdict-save">이 판단 기록 남기기</button></div>') +
+      '</div>';
+  }
+
+
+  function monthCardHTML(m, md, done, total) {
+    return '<section class="card">' +
+      '<div class="card-head"><span class="card-cap">' + m + '월 · ' + esc(MONTH_TAG[m] || '') + '</span>' +
+      '<span class="topbar-spacer"></span><span class="progress-num">' + done + '/' + total + '</span></div>' +
+      '<h2 class="card-title">' + esc(md.title) + '</h2>' +
+      '<ol class="mini-num">' + md.now.map(function (t, i) {
+        return '<li><span class="num">' + (i + 1) + '</span><span>' + esc(t) + '</span></li>';
+      }).join('') + '</ol>' +
+      '<div class="progress"><i style="width:' + (total ? Math.round(done / total * 100) : 0) + '%"></i></div>' +
+      '<button class="row-link" data-a="nav" data-r="radar">이 달 전체 보기' + icon('chevron') + '</button>' +
+      '</section>';
+  }
+
+
+  function statsCardHTML(open, report, retro) {
+    return '<section class="card stats-card">' +
+      '<button class="stat red" data-a="nav" data-r="respond"><b>' + open + '</b><span>진행 중 사안</span></button>' +
+      '<button class="stat blue" data-a="open-tracker-filter"><b>' + report + '</b><span>보고 필요</span></button>' +
+      '<button class="stat" data-a="nav" data-r="log"><b>' + retro + '</b><span>남긴 기록</span></button>' +
+      '</section>';
+  }
+
+
+  function recentCardHTML(recent) {
+    return '<section class="card">' +
+      '<div class="card-head"><h2 class="card-title">남긴 판단</h2><span class="topbar-spacer"></span>' +
+      '<button class="mini-link" data-a="open-retro">' + icon('plus') + ' 쓰기</button></div>' +
+      (recent.length ? recent.map(function (r) {
+        return '<div class="log-mini"><div class="lm-top"><span class="tag ' + tagTone(r.tag) + '">' + esc(r.tag || '기록') + '</span>' +
+          '<span class="log-date">' + fmtDate(r.date) + '</span></div>' +
+          '<div class="lm-t">' + esc(r.situation || '') + '</div>' +
+          (r.next ? '<div class="lm-n">→ ' + esc(r.next) + '</div>' : '') + '</div>';
+      }).join('') : '<p class="card-sub">아직 기록이 없습니다. 오늘 판단한 일 하나만 남겨 보세요.</p>') +
+      '</section>';
+  }
+
+
+  function principlesRowHTML() {
+    var ps = principles();
+    var line = ps.slice(0, 3).map(function (p) { return p.k; }).join(' · ');
+    return '<button class="row-card" data-a="open-principles">' +
+      '<span class="row-emoji">🧭</span>' +
+      '<span class="row-body"><b>내 운영 원칙 ' + ps.length + '개</b><em>' + esc(line) + ' …</em></span>' +
+      '<span class="next-a">' + icon('chevron') + '</span></button>';
+  }
+
+
+  function principlesSheet() {
+    openSheet({
+      title: '내 운영 원칙',
+      sub: '학년 운영에서 매번 되돌아볼 기준입니다.',
+      body: principles().map(function (p, i) {
+        return '<div class="item-row"><b>' + esc(p.k) + '</b><p>' + esc(p.v) + '</p>' +
+          linkChipsHTML(p.links, 'principle', p.id || ('pr' + i)) + '</div>';
+      }).join(''),
+      foot: '<button class="btn line" data-a="edit-principles">' + icon('pencil') + ' 고치기</button>' +
+        '<button class="btn primary" data-a="close-sheet">닫기</button>'
+    });
+  }
+
+  function judgeSegsHTML() {
+    var segs = [
+      { k: 'shape', l: '일의 성격' },
+      { k: 'order', l: '결재 순서' },
+      { k: 'report', l: '보고·결정권' },
+      { k: 'forms', l: '양식·정석' }
+    ];
+    return '<div class="segmented scroll">' + segs.map(function (s) {
+      return '<button class="' + (judgeSeg === s.k ? 'active' : '') + '" data-a="judge-seg" data-v="' + s.k + '">' + s.l + '</button>';
+    }).join('') + '</div>';
+  }
+
+
+  function judgeShapeHTML() {
+    var J = D.judge;
+    var any = SHAPE.affect || SHAPE.fair || SHAPE.approval || SHAPE.flip;
+    var key = (SHAPE.fair || SHAPE.approval || SHAPE.flip) ? 'collect' : 'draft';
+    return '<section class="card">' +
+      '<p class="card-sub">아래 중 하나라도 해당하면 “모아서 정하는 일”입니다.</p>' +
+      '<div class="qlist">' + J.shapeQuestions.map(function (q) {
+        return '<button class="qrow ' + (SHAPE[q.k] ? 'on' : '') + '" data-a="shape" data-k="' + q.k + '">' +
+          '<span class="box">' + icon('check') + '</span>' +
+          '<span class="qt-wrap"><span class="qt">' + esc(q.q) + '</span><span class="qh">' + esc(q.hint) + '</span></span>' +
+          '</button>';
+      }).join('') + '</div>' +
+      '</section>' +
+      '<div class="result ' + (any ? J.shapes[key].tone : 'neutral') + ' shape-result" id="shape-result">' +
+      (any ? shapeBlock(key) :
+        '<p class="result-empty">아직 판단 전<span>하나라도 해당하면 결과와 순서가 나옵니다.</span></p>') +
+      '</div>';
+  }
+
+
+  function orderListHTML() {
+    var T = D.judge.orderTable;
+    if (!T) return '';
+    return '<p class="lede">업무를 고르면 순서·담당·함정·기한이 세로로 펼쳐집니다.</p>' +
+      '<div class="list-card">' + T.rows.map(function (r, i) {
+        return '<button class="list-row" data-a="judge-work" data-i="' + i + '">' +
+          '<span class="lr-num">' + (i + 1) + '</span>' +
+          '<span class="lr-body"><b>' + esc(r.work) + '</b><em>' + esc(r.time) + '</em></span>' +
+          '<span class="next-a">' + icon('chevron') + '</span></button>';
+      }).join('') + '</div>' +
+      '<p class="foot-note">' + esc(T.note) + '</p>';
+  }
+
+
+  function judgeWorkHTML() {
+    var T = D.judge.orderTable;
+    var r = T && T.rows[judgeWork];
+    if (!r) return orderListHTML();
+    var pid = WORK_PROTOS[judgeWork];
+    var p = pid ? protocolsData().filter(function (x) { return x.id === pid; })[0] : null;
+    return '<button class="back-row" data-a="judge-work-back">' + icon('chevron') + '결재 순서 전체</button>' +
+      '<h2 class="detail-title">' + esc(r.work) + '</h2>' +
+      '<p class="detail-sub">' + esc(r.time) + '</p>' +
+      '<section class="card"><p class="sec-label">순서</p>' +
+      '<ol class="vtl big">' + r.order.map(function (s, i) {
+        return '<li><span class="vtl-n">' + (i + 1) + '</span><span class="vtl-t">' + esc(s) + '</span></li>';
+      }).join('') + '</ol></section>' +
+      '<section class="card">' +
+      '<div class="meta-row"><span>누가</span><p>' + esc(r.who) + '</p></div>' +
+      '<div class="meta-row warn"><span>함정</span><p>' + esc(r.trap) + '</p></div>' +
+      '<div class="meta-row"><span>기한</span><p>' + esc(r.time) + '</p></div>' +
+      '</section>' +
+      (p ? '<div class="next"><p class="sec-label">이 업무 대응</p>' + nextRow('protocol', p.id, '', '프로토콜', p.title) + '</div>' : '');
+  }
+
+
+  function reportDecideHTML() {
+    var isLines = reportTab === 'lines';
+    var groups = isLines ? reportLinesData() : (D.judge.decisions || []);
+    if (!groups.length) return '';
+    var gi = Math.min(reportLevel, groups.length - 1);
+    var g = groups[gi];
+    var tone = g.tone === 'danger' ? 'red' : g.tone === 'warn' ? 'amber' : 'green';
+    return '<div class="segmented mini" style="margin-bottom:14px">' +
+      '<button class="' + (isLines ? 'active' : '') + '" data-a="report-tab" data-v="lines">보고선</button>' +
+      '<button class="' + (!isLines ? 'active' : '') + '" data-a="report-tab" data-v="decide">결정권</button>' +
+      '</div>' +
+      '<div class="filter-row">' + groups.map(function (x, i) {
+        return '<button class="chip ' + (i === gi ? 'active' : '') + '" data-a="report-level" data-v="' + i + '">' +
+          esc(isLines ? x.level : x.k) + ' <b>' + (x.items || []).length + '</b></button>';
+      }).join('') + '</div>' +
+      '<section class="card" style="margin-top:14px">' +
+      '<div class="card-head"><span class="tag ' + tone + '">' + esc(isLines ? g.level : g.k) + '</span></div>' +
+      '<p class="card-sub">' + esc(g.note) + '</p>' +
+      (g.items || []).map(function (it, ii) {
+        return '<div class="item-row"><b>' + esc(it.t) + '</b><p>' + esc(it.d) + '</p>' +
+          linkChipsHTML(it.links, 'report', gi, ii) + '</div>';
+      }).join('') +
+      '</section>' +
+      (!isLines ? '<p class="foot-note">구두 지시도 메모로 남기세요. “부장이 정했다”를 막는 기록입니다.</p>' : '') +
+      '<div class="next"><p class="sec-label">바로 쓰는 양식</p>' +
+      nextRow('judge-seg', '', 'forms', '양식', '공지·회의·보고 3줄') + '</div>';
+  }
+
+
+  function formsHTML() {
+    var J = D.judge;
+    var E = J.efficiency;
+    return '<section class="card acc-card">' +
+      accHTML('공지 한 번에 보내기', '무엇을 · 언제까지 · 어떻게', J.noticeRules.map(function (r) {
+        return '<div class="item-row"><b>' + esc(r.t) + '</b><p>' + esc(r.d) + '</p></div>';
+      }).join('') + '<div class="pre">' + esc(J.noticeTemplate) + '</div>' + copyWide(J.noticeTemplate, '공지 양식 복사')) +
+      accHTML('회의를 1/3로', '초안 3일 전, 안건 3개', '<ul class="plain">' + J.meetingRules.map(function (t) {
+        return '<li>' + esc(t) + '</li>';
+      }).join('') + '</ul><div class="pre">' + esc(J.meetingTemplate) + '</div>' + copyWide(J.meetingTemplate, '회의 안건 복사')) +
+      accHTML('보고는 3줄', '사실 · 조치 · 필요', '<div class="pre">' + esc(J.reportForm) + '</div>' +
+        '<p class="sec-label">예시</p><div class="pre">' + esc(J.reportExample) + '</div>' + copyWide(J.reportForm, '보고 양식 복사')) +
+      accHTML('수합은 시트로', E.sheet.title, '<div class="cols">' + E.sheet.cols.map(function (c) {
+        return '<span>' + esc(c) + '</span>';
+      }).join('') + '</div><ul class="plain">' + E.sheet.steps.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>') +
+      accHTML('문서등록대장 먼저', '처음 하는 일의 절반은 작년 결재본', '<ul class="plain">' + E.search.map(function (t) {
+        return '<li>' + esc(t) + '</li>';
+      }).join('') + '</ul>') +
+      '</section>' +
+      '<section class="card">' +
+      '<div class="card-head"><h2 class="card-title">두 번 일하지 않는 8가지</h2></div>' +
+      E.rules.map(function (r) {
+        return '<div class="item-row"><b>' + esc(r.t) + '</b><p>' + esc(r.d) + '</p></div>';
+      }).join('') +
+      '</section>';
+  }
+
+
+  function groupProtocolsHTML(list, k) {
+    var g = groupDef(k);
+    var shown = list.filter(function (p) { return groupOf(p) === k; });
+    return '<button class="back-row" data-a="resp-back">' + icon('chevron') + '주제 전체</button>' +
+      '<h2 class="detail-title">' + g.emoji + ' ' + esc(g.name) + '</h2>' +
+      '<p class="detail-sub">' + esc(g.desc) + ' · ' + shown.length + '개</p>' +
+      (shown.length ? '<div class="list-card">' + shown.map(function (p) {
+        return '<button class="list-row" data-a="protocol" data-id="' + esc(p.id) + '">' +
+          '<span class="lr-emoji">' + esc(p.emoji || '📌') + '</span>' +
+          '<span class="lr-body"><b>' + esc(p.title) + '</b><em>' + esc(p.when) + '</em></span>' +
+          '<span class="next-a">' + icon('chevron') + '</span></button>';
+      }).join('') + '</div>' : '<p class="card-sub">이 주제에 프로토콜이 아직 없습니다.</p>') +
+      '<p class="foot-note">프로토콜을 누르면 순서·절대 금지·수신자별 문장이 펼쳐집니다.</p>';
+  }
+
+
+  function allProtocolsHTML(list) {
+    var groups = ['all', '공통', '기능부장', '학년 참고'];
+    var shown = list.filter(function (p) { return protocolFilter === 'all' || scopeGroup(p) === protocolFilter; });
+    return '<button class="back-row" data-a="resp-back">' + icon('chevron') + '주제 전체</button>' +
+      '<h2 class="detail-title">전체 프로토콜</h2>' +
+      '<p class="detail-sub">' + shown.length + '개</p>' +
+      '<div class="filter-row">' + groups.map(function (s) {
+        return '<button class="chip ' + (protocolFilter === s ? 'active' : '') + '" data-a="p-filter" data-v="' + s + '">' +
+          (s === 'all' ? '전체' : s) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="list-card" style="margin-top:14px">' + shown.map(function (p) {
+        return '<button class="list-row" data-a="protocol" data-id="' + esc(p.id) + '">' +
+          '<span class="lr-emoji">' + esc(p.emoji || '📌') + '</span>' +
+          '<span class="lr-body"><b>' + esc(p.title) + '</b><em>' + esc(p.when) + '</em></span>' +
+          '<span class="scope-chip ' + scopeTone(p) + '">' + esc(p.scope || '공통') + '</span>' +
+          '</button>';
+      }).join('') + '</div>';
+  }
+
   function defaultTime() {
     var d = new Date();
     d.setHours(d.getHours() + 2);
@@ -1165,41 +1595,7 @@
     return '오늘 ' + ampm + ' ' + h + '시';
   }
 
-  function verdictHTML() {
-    var o = D.quick.outcomes[verdictKey()];
-    var checked = Q.ground || Q.money || Q.all || Q.report || Q.decide || Q.time;
-    if (!checked) {
-      return '' +
-        '<div class="verdict empty">' +
-        '<div class="vt"><span>지금 판단</span></div>' +
-        '<p class="vtitle">아직 판단 전</p>' +
-        '<p class="vsub">위 6가지 중 하나라도 체크하면 결론이 바로 나옵니다.</p>' +
-        '</div>';
-    }
-    var time = timeLabel(($('#time-input') && $('#time-input').value) || to24(defaultTime()));
-    var msg = o.msg.replace('{time}', time);
-    return '' +
-      '<div class="verdict ' + o.tone + '">' +
-      '<div class="vt"><span>결론</span></div>' +
-      '<p class="vtitle">' + esc(o.title) + '</p>' +
-      '<p class="vsub">' + esc(o.sub) + '</p>' +
-      '</div>' +
-      '<div class="msgbox">' +
-      '<div class="mlabel">그대로 보낼 문장</div>' +
-      '<div class="mtext">' + esc(msg) + '</div>' +
-      '<div class="msgbox-foot">' +
-      '<label class="time-pick">약속 시각 <input type="time" id="time-input" value="' + to24(defaultTime()) + '"></label>' +
-      '<button class="copy-btn" data-a="copy" data-copy="' + encodeURIComponent(msg) + '">' +
-      icon('copy') + '복사</button>' +
-      '</div>' +
-      '</div>' +
-      '<ul class="why-list">' + o.why.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>' +
-      (o.case ? '<div class="hint-box" style="margin-top:12px"><span>📍</span><span>' + esc(o.case) + '</span></div>' : '') +
-      '<div class="btn-row">' +
-      '<button class="btn small line" data-a="verdict-save">판단 기록 남기기</button>' +
-      '<button class="btn small line" data-a="open-protocol">대응 프로토콜</button>' +
-      '</div>';
-  }
+  function verdictHTML() { return listVerdictHTML(); }
 
   function to24(txt) {
     var m = String(txt).match(/(오전|오후)\s*(\d+)시/);
@@ -1290,11 +1686,11 @@
       '<header class="topbar" id="topbar"><div class="topbar-in">' +
       '<div class="brand-mini mobile-only"><div class="brand-mark">學</div><div class="brand-name">학년부장 OS</div></div>' +
       '<span class="desk-crumb" id="crumb">오늘</span>' +
-      '<button class="icon-btn" data-a="search" aria-label="찾기" title="찾기 (규정·절차·보낼 말)">' + icon('search') + '</button>' +
       '<div class="topbar-spacer"></div>' +
       yearSwitchHTML() +
       '<button class="role-pill" data-a="open-years" id="role-pill" title="역할·학년도 바꾸기"><span class="dot"></span><span id="role-text">' + esc(roleLabel()) + '</span></button>' +
       '<span class="sync" id="sync-chip" data-a="settings" title="저장·동기화 설정"><i></i><span class="sync-t">기기에만 저장</span></span>' +
+      '<button class="icon-btn" data-a="search" aria-label="찾기" title="찾기 (규정·절차·보낼 말)">' + icon('search') + '</button>' +
       '<button class="icon-btn desktop-only" data-a="settings" aria-label="설정">' + icon('gear') + '</button>' +
       '</div></header>' +
       '<div class="wrap" id="view"></div>' +
@@ -1348,6 +1744,7 @@
   }
 
   /* ------------------------------------------------------------- 오늘 */
+
   function viewToday() {
     var now = new Date();
     var m = now.getMonth() + 1;
@@ -1355,92 +1752,24 @@
     var yv = Y();
     var open = yv.tracker.filter(function (t) { return !t.deleted && t.status !== '종결'; });
     var report = open.filter(function (t) { return t.report === '보고 필요'; });
-    var done = 0, total = 0;
-    (md.checks || []).forEach(function (c) {
-      total++;
-      if (checkOn(yv.grade, c.id)) done++;
-    });
-    var recent = yv.retro.filter(function (r) { return !r.deleted; }).slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); }).slice(0, 2);
+    var done = 0, total = (md.checks || []).length;
+    (md.checks || []).forEach(function (c) { if (checkOn(yv.grade, c.id)) done++; });
+    var recent = yv.retro.filter(function (r) { return !r.deleted; })
+      .slice().sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); }).slice(0, 2);
 
     return '' +
       yearNoteHTML() +
-      '<div class="page-head">' +
-      '<p class="page-eyebrow">' + m + '월 ' + now.getDate() + '일 ' + weekdayKor(now) + '요일 · ' + esc(roleLabel()) + ' · ' + esc(yearLabel()) + '</p>' +
-      '<h1 class="page-title">지금 바로 답해도 되나?</h1>' +
-      '<p class="page-sub">질문·민원·돌발이 오면 답하기 전에 6가지만 확인하세요. 3초면 결론과 보낼 문장이 나옵니다.</p>' +
-      '</div>' +
-
+      pageHead(m + '월 ' + now.getDate() + '일 ' + weekdayKor(now) + '요일 · ' + esc(roleLabel()),
+        '지금 답해도 될까요?',
+        '질문·민원이 오면 답하기 전에 6가지만 확인하세요. 결론과 보낼 문장이 바로 나옵니다.') +
       '<button class="search-cta" data-a="search">' + icon('search') +
-      '<span class="sc-t">무엇이든 찾기 — 규정·절차·예외·바로 보낼 말</span><span class="sc-k">찾기</span></button>' +
-
-      '<div class="home-grid">' +
-      '<div class="col">' +
-
-      '<section class="card quick">' +
-      '<div class="quick-top"><div>' +
-      '<h2 class="quick-title">3초 판단 브레이크</h2>' +
-      '<p class="quick-sub">체크하면 결론과 보낼 문장이 바로 나옵니다.</p>' +
-      '</div></div>' +
-      '<div class="qlist" id="qlist">' + qRowsHTML() + '</div>' +
-      '<div id="verdict-wrap">' + verdictHTML() + '</div>' +
-      '</section>' +
-
-      '<section class="card">' +
-      '<div class="card-head"><span class="card-cap">' + m + '월</span>' +
-      '<h2 class="card-title">' + esc(md.title) + '</h2></div>' +
-      '<div class="now-list" style="margin-top:2px">' +
-      md.now.map(function (t, i) {
-        return '<div class="now-item" style="background:#F7F9FB;color:#333D4B"><span class="num" style="background:#E8F3FF;color:#1B64DA">' + (i + 1) + '</span><span>' + esc(t) + '</span></div>';
-      }).join('') +
-      '</div>' +
-      '<div class="progress-line" style="margin-top:16px">' +
-      '<div class="progress-bar"><i style="width:' + (total ? Math.round(done / total * 100) : 0) + '%"></i></div>' +
-      '<span class="progress-num">' + done + '/' + total + '</span>' +
-      '</div>' +
-      '<p class="card-note">이번 달 동학년 체크리스트 진행률입니다.</p>' +
-      '<div class="btn-row"><button class="btn small line" data-a="nav" data-r="radar">레이더 열기</button>' +
-      '<button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(noticeOf(md, yv.grade)) + '">' + icon('copy') + ' 공지 복사</button></div>' +
-      (md.voices && md.voices.length ? '<div class="voice voice-home">' +
-        '<span class="vtag">' + esc(md.voices[0].tag || '단톡방') + '</span>' +
-        '<div class="vq">' + esc(md.voices[0].q) + '</div>' +
-        '<div class="va"><span class="va-k">베테랑 답</span>' + esc(md.voices[0].a) + '</div>' +
-        '<button class="mini-link" style="margin-top:6px" data-a="nav" data-r="radar">이 달 고민 더 보기</button></div>' : '') +
-      '</section>' +
-
-      '</div><div class="col">' +
-
-      '<section class="card">' +
-      '<div class="card-head"><h2 class="card-title">지금 챙길 것</h2></div>' +
-      '<div class="stats">' +
-      '<button class="stat red" data-a="nav" data-r="respond"><div class="n">' + open.length + '</div><div class="l">진행 중 사안</div></button>' +
-      '<button class="stat blue" data-a="open-tracker-filter" data-f="report"><div class="n">' + report.length + '</div><div class="l">보고 필요</div></button>' +
-      '<button class="stat" data-a="nav" data-r="log"><div class="n">' + yv.retro.filter(function (r) { return !r.deleted; }).length + '</div><div class="l">남긴 기록</div></button>' +
-      '</div>' +
-      '<p class="card-note">‘진행 중’은 12개 반 민원·특이사항·휴직 인수인계 중 종결되지 않은 건입니다.</p>' +
-      '</section>' +
-
+      '<span class="sc-t">규정·절차·보낼 말 찾기</span><span class="sc-k">찾기</span></button>' +
+      flowHTML() +
+      monthCardHTML(m, md, done, total) +
+      statsCardHTML(open.length, report.length, yv.retro.filter(function (r) { return !r.deleted; }).length) +
       hubCardHTML() +
-
-      '<section class="card">' +
-      '<div class="card-head"><h2 class="card-title">남긴 판단</h2>' +
-      '<span class="topbar-spacer"></span>' +
-      '<button class="chip small" data-a="open-retro">+ 쓰기</button></div>' +
-      (recent.length ? recent.map(function (r) { return miniLog(r); }).join('') :
-        '<p class="card-note" style="margin-top:0">아직 기록이 없습니다. 오늘 판단한 일 하나만 남겨 보세요. 다음에 같은 상황이 왔을 때 훨씬 빨라집니다.</p>') +
-      '</section>' +
-
-      '<section class="card card-tight">' +
-      '<div class="card-head" style="margin-bottom:10px"><h2 class="card-title" style="font-size:16px">내 운영 원칙</h2>' +
-      '<span class="topbar-spacer"></span>' +
-      '<button class="mini-link" data-a="edit-principles">' + icon('pencil') + ' 고치기</button></div>' +
-      principles().map(function (p, i) {
-        return '<div class="principle"><div class="pr-k">' + esc(p.k) + '</div>' +
-          '<div class="pr-v">' + esc(p.v) + '</div>' +
-          linkChipsHTML(p.links, 'principle', p.id || ('pr' + i)) + '</div>';
-      }).join('') +
-      '</section>' +
-
-      '</div></div>' +
+      recentCardHTML(recent) +
+      principlesRowHTML() +
       '<p class="foot-note">기록은 기기에 먼저 저장되고, 연결하면 비공개 시트와 동기화됩니다.</p>';
   }
 
@@ -1458,16 +1787,25 @@
     return D.quick.questions.map(function (q) {
       return '<button class="qrow ' + (Q[q.k] ? 'on' : '') + '" data-a="toggle-q" data-k="' + q.k + '">' +
         '<span class="box">' + icon('check') + '</span>' +
-        '<span><span class="qt">' + esc(q.q) + '</span><span class="qh" style="display:block">' + esc(q.hint) + '</span></span>' +
+        '<span class="qt-wrap"><span class="qt">' + esc(q.q) + '</span><span class="qh">' + esc(q.hint) + '</span></span>' +
         '</button>';
     }).join('');
   }
 
   /* ------------------------------------------------------------- 레이더 */
+  /* 공지 초안 — 저장된 문장이 없으면 이 달 내용으로 초안을 만든다 */
+  function autoNotice(d, g) {
+    var lines = ['[' + g + '학년] ' + String(d.title || ''), ''];
+    (d.now || []).forEach(function (t, i) { lines.push((i + 1) + '. ' + t); });
+    if (d.deadline) lines.push('', '마감 — ' + d.deadline);
+    lines.push('', '○ 날짜·양식·제출처를 채워 한 번에 보내 주세요. 문의는 학년부장에게.');
+    return lines.join('\n');
+  }
+
   function noticeOf(d, g) {
     var t = String(d.notice || '');
-    if (g === '3') return t;
-    return t.replace(/^\[3학년\]/, '[' + g + '학년]');
+    if (!t) return autoNotice(d, g);
+    return t.replace(/^\[[1-6]학년\]/, '[' + g + '학년]');
   }
 
   function viewRadar() {
@@ -1480,113 +1818,105 @@
     (d.checks || []).forEach(function (c) { if (checkOn(g, c.id)) done++; });
     var nowM = new Date().getMonth() + 1;
     var point = pointOf(d, g);
+    var rel = (MONTH_PROTOS[m] || []).map(function (pid) {
+      return protocolsData().filter(function (x) { return x.id === pid; })[0];
+    }).filter(Boolean);
 
     return '' +
       yearNoteHTML() +
-      '<div class="page-head">' +
-      '<p class="page-eyebrow">1년 선제 레이더 · ' + esc(yearLabel()) + '</p>' +
-      '<h1 class="page-title">터지기 전에 미리 뿌리는 것</h1>' +
-      '<p class="page-sub">월을 고르면 그 달에 뿌릴 공지·체크리스트·지뢰가 나옵니다. 내 학교 사정에 맞게 고쳐 쓰세요.</p>' +
-      '</div>' +
+      pageHead('1년 선제 레이더 · ' + esc(yearLabel()), '터지기 전에 미리 뿌리는 것',
+        '월을 고르면 그 달에 뿌릴 일·서류·지뢰가 나옵니다. 내 학교 사정에 맞게 고쳐 쓰세요.') +
 
-      '<div class="gradestrip" style="margin-bottom:14px">' +
-      GRADES.map(function (gg) {
+      '<div class="gradestrip">' + GRADES.map(function (gg) {
         return '<button class="chip ' + (g === gg ? 'active' : '') + '" data-a="grade" data-g="' + gg + '">' + gg + '학년</button>';
-      }).join('') +
-      '</div>' +
+      }).join('') + '</div>' +
 
-      '<div class="month-strip" style="margin-bottom:16px">' +
-      D.monthOrder.map(function (mm) {
+      '<div class="month-strip">' + D.monthOrder.map(function (mm) {
         return '<button class="mbtn ' + (mm === m ? 'active' : '') + (mm === nowM ? ' now' : '') + (isEdited(mm) ? ' edited' : '') + '" data-a="month" data-m="' + mm + '">' +
           '<span class="m">' + mm + '월</span><span class="s">' + MONTH_TAG[mm] + '</span></button>';
-      }).join('') +
-      '</div>' +
+      }).join('') + '</div>' +
 
-      '<div class="month-hero">' +
-      '<div class="mh-top"><span>' + m + '월</span><span style="opacity:.6">·</span><span>' + g + '학년</span>' +
+      '<section class="card month-hero2">' +
+      '<div class="mh-head"><span class="mh-badge">' + m + '월</span><span class="mh-tag">' + esc(MONTH_TAG[m] || '') + ' · ' + g + '학년</span>' +
       '<span class="topbar-spacer"></span>' +
-      (isEdited(m) ? '<span class="mh-chip">내가 고침</span>' : '') +
-      '<button class="mh-edit" data-a="radar-edit" data-m="' + m + '">' + icon('pencil') + ' 편집</button>' +
-      '</div>' +
+      (isEdited(m) ? '<span class="mini-tag">내가 고침</span>' : '') +
+      '<button class="mini-link" data-a="radar-edit" data-m="' + m + '">' + icon('pencil') + ' 편집</button></div>' +
       '<h2>' + esc(d.title) + '</h2>' +
-      '<p>' + esc(d.lead) + '</p>' +
-      (d.route ? '<div class="mh-route"><span class="dot"></span><span>' + esc(d.route) + '</span></div>' : '') +
-      '<div class="now-list">' +
-      d.now.map(function (t, i) {
-        return '<div class="now-item"><span class="num">' + (i + 1) + '</span><span>' + esc(t) + '</span></div>';
-      }).join('') +
-      '</div>' +
-      '</div>' +
+      '<p class="mh-lead">' + esc(d.lead) + '</p>' +
+      (d.route ? '<div class="mh-route">' + esc(d.route) + '</div>' : '') +
+      '<p class="sec-label">이 달에 할 일</p>' +
+      '<ol class="mini-num">' + d.now.map(function (t, i) {
+        return '<li><span class="num">' + (i + 1) + '</span><span>' + esc(t) + '</span></li>';
+      }).join('') + '</ol>' +
+      '</section>' +
 
-      '<section class="card" style="margin-top:14px" id="checks-card">' + checksCardHTML() + '</section>' +
+      '<section class="card" id="checks-card">' + checksCardHTML() + '</section>' +
 
       (d.paper && d.paper.length ? '<section class="card">' +
         '<div class="card-head"><span class="card-cap">이 달 서류·결재</span></div>' +
-        '<h2 class="card-title" style="margin-bottom:8px">이 달에 만들어 둘 것</h2>' +
-        '<ul class="plain-list">' + d.paper.map(function (t) { return '<li><span class="b"></span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' +
-        (d.deadline ? '<div class="report-note"><div class="rn-k">마감 한 줄</div><p>' + esc(d.deadline) + '</p></div>' : '') +
+        '<ul class="plain">' + d.paper.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
+        (d.deadline ? '<div class="note-box warn"><span>마감 한 줄</span><p>' + esc(d.deadline) + '</p></div>' : '') +
         '</section>' : '') +
 
-      (d.voices && d.voices.length ? '<section class="card">' +
+      (rel.length ? '<section class="card">' +
+        '<div class="card-head"><span class="card-cap">이 달에 꺼내 쓸 프로토콜</span></div>' +
+        rel.map(function (p) { return nextRow('protocol', p.id, '', '프로토콜', p.title); }).join('') +
+        '<div class="next"><p class="sec-label">부서·결재도 함께</p>' +
+        nextRow('nav-desk', '', '', '부서', '기능부장 8개 부서의 1년 정석') +
+        nextRow('go-judge-seg', '', 'order', '판단', '결재·품의·학운위 순서표') + '</div>' +
+        '</section>' : '') +
+
+      (d.voices && d.voices.length ? '<section class="card acc-card">' +
         '<div class="card-head"><span class="card-cap">단톡방에서 실제로 나온 고민</span></div>' +
-        '<h2 class="card-title" style="margin-bottom:4px">부장들이 실제로 막힌 지점</h2>' +
-        '<p class="card-note" style="margin-top:0;margin-bottom:6px">전국 학년부장·교무·생활인성·학폭·안전·체육·늘봄·정보·교과서·기초학력 방(2026년)에서 반복된 질문을 익명·일반화했습니다. 학년에 따라 다른 항목은 태그로 표시했습니다.</p>' +
         d.voices.map(function (v) {
-          return '<div class="voice">' +
-            (v.tag ? '<span class="vtag">' + esc(v.tag) + '</span>' : '') +
-            '<div class="vq">' + esc(v.q) + '</div>' +
-            '<div class="va"><span class="va-k">베테랑 답</span>' + esc(v.a) + '</div></div>';
+          return accHTML((v.tag ? '[' + v.tag + '] ' : '') + v.q, '베테랑 답 보기', '<p class="quote">' + esc(v.a) + '</p>');
         }).join('') +
         '</section>' : '') +
 
       '<section class="card">' +
       '<div class="card-head"><span class="card-cap">공지 초안</span><span class="topbar-spacer"></span>' +
       '<button class="mini-link" data-a="radar-edit" data-m="' + m + '">' + icon('pencil') + ' 고치기</button></div>' +
-      '<h2 class="card-title" style="margin-bottom:12px">그대로 보내는 안내문</h2>' +
-      '<div class="notice-pre">' + esc(notice) + '</div>' +
-      '<div class="btn-row"><button class="btn primary small" data-a="copy" data-copy="' + encodeURIComponent(notice) + '">' + icon('copy') + ' 공지 복사</button></div>' +
-      '<p class="card-note">○ 자리만 학교 일정으로 채우면 됩니다. 보내기 전에 날짜·마감·양식을 한 번 더 확인하세요.</p>' +
+      '<div class="pre">' + esc(notice) + '</div>' + copyWide(notice, '공지 복사') +
+      '<p class="card-sub">' + (d.notice ? '○ 자리만 학교 일정으로 채우면 됩니다.' : '이 달 할 일로 만든 초안입니다. ‘고치기’에서 다듬어 저장하세요.') +
+      ' 보내기 전에 날짜·마감·양식을 한 번 더 확인하세요.</p>' +
       '</section>' +
 
-      '<section class="card">' +
-      '<div class="card-head"><span class="card-cap">놓치기 쉬운 지뢰</span><span class="topbar-spacer"></span>' +
-      '<button class="mini-link" data-a="radar-edit" data-m="' + m + '">' + icon('pencil') + ' 고치기</button></div>' +
-      '<h2 class="card-title" style="margin-bottom:8px">이 달에 특히 잘 터지는 것</h2>' +
-      (d.traps.length ? d.traps.map(function (t) {
-        return '<div class="trap"><div class="ico">⚠️</div><div><div class="tt">' + esc(t.t) + '</div><div class="td">' + esc(t.d) + '</div></div></div>';
-      }).join('') : '<p class="card-note" style="margin-top:0">아직 적어 둔 지뢰가 없습니다. 편집에서 추가해 보세요.</p>') +
-      '</section>' +
+      (d.traps.length ? '<section class="card">' +
+        '<div class="card-head"><span class="card-cap">놓치기 쉬운 지뢰</span><span class="topbar-spacer"></span>' +
+        '<button class="mini-link" data-a="radar-edit" data-m="' + m + '">' + icon('pencil') + ' 고치기</button></div>' +
+        d.traps.map(function (t) {
+          return '<div class="trap"><span class="trap-ico">!</span><div><div class="tt">' + esc(t.t) + '</div><div class="td">' + esc(t.d) + '</div></div></div>';
+        }).join('') + '</section>' : '') +
 
       '<section class="card">' +
       '<div class="card-head"><h2 class="card-title">부장이 직접 챙길 일</h2><span class="topbar-spacer"></span>' +
       '<button class="mini-link" data-a="radar-edit" data-m="' + m + '">' + icon('pencil') + ' 고치기</button></div>' +
-      (d.me.length ? '<ul class="plain-list">' + d.me.map(function (t) { return '<li><span class="b"></span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' : '<p class="card-note">비어 있습니다. 편집에서 추가해 보세요.</p>') +
-      (d.report ? '<div class="report-note"><div class="rn-k">보고 · 행정실 타이밍</div><p>' + esc(d.report) + '</p></div>' : '') +
-      (point ? '<div class="grade-note"><div class="g">' + g + '학년</div><p>' + esc(point) + '</p></div>' : '') +
+      (d.me.length ? '<ul class="plain">' + d.me.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' : '<p class="card-sub">비어 있습니다. 편집에서 추가해 보세요.</p>') +
+      (d.report ? '<div class="note-box warn"><span>보고 · 행정실 타이밍</span><p>' + esc(d.report) + '</p></div>' : '') +
+      (point ? '<div class="note-box"><span>' + g + '학년 포인트</span><p>' + esc(point) + '</p></div>' : '') +
       '</section>' +
 
       (d.memo ? '<section class="card"><div class="card-head"><span class="card-cap">내 메모</span><span class="topbar-spacer"></span>' +
         '<button class="mini-link" data-a="radar-edit" data-m="' + m + '">' + icon('pencil') + ' 고치기</button></div>' +
-        '<div class="notice-pre" style="background:#FFF9E8;border-color:#F5E3B3">' + esc(d.memo) + '</div></section>' : '') +
+        '<div class="pre memo">' + esc(d.memo) + '</div></section>' : '') +
 
       '<section class="card">' +
       '<div class="card-head"><span class="card-cap">이 달 링크</span><span class="topbar-spacer"></span>' +
       '<button class="mini-link" data-a="edit-links" data-kind="month" data-k1="' + m + '">' + icon('plus') + ' 링크</button></div>' +
       linkChipsHTML((radarOf(m).links || []), 'month', m) +
       ((radarOf(m).links || []).filter(function (l) { return safeUrl(l.u); }).length ? ''
-        : '<p class="card-note" style="margin-top:0">이 달에 볼 문서·폴더·공문 주소를 달아 두면 바로 열 수 있습니다.</p>') +
+        : '<p class="card-sub">이 달에 볼 문서·폴더·공문 주소를 달아 두면 바로 열 수 있습니다.</p>') +
       '</section>' +
 
-      '<div class="btn-row" style="margin-top:14px">' +
-      '<button class="btn small line" data-a="copy-docs">' + icon('copy') + ' 문서용 복사</button>' +
-      '<button class="btn small line" data-a="open-export">' + icon('down') + ' 내보내기(CSV)</button></div>' +
+      '<div class="result-foot"><button class="ghost-btn" data-a="copy-docs">' + icon('copy') + ' 문서용 복사</button>' +
+      '<button class="ghost-btn" data-a="open-export">' + icon('down') + ' 내보내기</button></div>' +
       '<p class="foot-note">학교·교육청 규정과 공문이 항상 우선입니다. 이 레이더는 “미리 챙길 것”을 잊지 않기 위한 기준입니다.</p>';
   }
 
   function checksCardHTML() {
     var m = radarMonth, g = Y().grade, d = radarOf(m);
     var done = 0;
-    var rows = (d.checks || []).map(function (c, i) {
+    var rows = (d.checks || []).map(function (c) {
       var on = checkOn(g, c.id);
       if (on) done++;
       return '<button class="check-row ' + (on ? 'on' : '') + '" data-a="check" data-id="' + esc(c.id) + '">' +
@@ -1596,8 +1926,8 @@
     return '' +
       '<div class="card-head"><span class="card-cap">동학년 체크리스트</span><span class="topbar-spacer"></span>' +
       '<span class="progress-num">' + done + '/' + total + '</span></div>' +
-      '<div class="progress-bar" style="margin-bottom:8px"><i style="width:' + (total ? Math.round(done / total * 100) : 0) + '%"></i></div>' +
-      (total ? '<div class="check-list">' + rows + '</div>' : '<p class="card-note" style="margin-top:0">체크리스트가 비어 있습니다. 편집에서 추가해 보세요.</p>');
+      '<div class="progress"><i style="width:' + (total ? Math.round(done / total * 100) : 0) + '%"></i></div>' +
+      (total ? '<div class="check-list">' + rows + '</div>' : '<p class="card-sub">체크리스트가 비어 있습니다. 편집에서 추가해 보세요.</p>');
   }
 
   /* ------------------------------------------------------------- 레이더 편집 시트 */
@@ -1647,7 +1977,7 @@
         '<div class="field"><label>한 줄 요약</label><input class="input" id="e-lead" value="' + esc(d.lead) + '"></div>' +
         '<div class="field"><label>이 달에 미리 뿌릴 것</label><div class="elist" data-l="now">' + listHTML('now', d.now, '예: 학부모총회 날짜를 첫 주에 확정한다') + '</div></div>' +
         '<div class="field"><label>공지 초안 (그대로 보낼 안내문)</label>' +
-        '<textarea class="textarea" id="e-notice" style="min-height:190px">' + esc(d.notice) + '</textarea>' +
+        '<textarea class="textarea" id="e-notice" style="min-height:190px">' + esc(d.notice || autoNotice(d, g)) + '</textarea>' +
         '<p class="card-note">맨 앞의 <b>[3학년]</b>은 지금 고른 학년에 맞춰 자동으로 바뀝니다.</p></div>' +
         '<div class="field"><label>동학년 체크리스트</label><div class="elist" data-l="checks">' +
         ((d.checks || []).map(checkRowHTML).join('') + '<button class="addline" data-a="row-add" data-l="checks">＋ 항목 추가</button>') +
@@ -1734,88 +2064,18 @@
   }
 
   /* ------------------------------------------------------------- 판단 */
+
   function viewJudge() {
-    var J = D.judge;
-    var any = SHAPE.affect || SHAPE.fair || SHAPE.approval || SHAPE.flip;
-    var shapeKey = (SHAPE.fair || SHAPE.approval || SHAPE.flip) ? 'collect' : 'draft';
-
     return '' +
-      '<div class="page-head">' +
-      '<p class="page-eyebrow">판단 · 조율 · ' + esc(yearLabel()) + '</p>' +
-      '<h1 class="page-title">내가 정할 일인가, 모아서 정할 일인가</h1>' +
-      '<p class="page-sub">단순한 일은 초안으로 치우고, 협조가 필요한 일만 모아서 정합니다.</p>' +
-      '</div>' +
-
-      '<section class="card">' +
-      '<div class="card-head"><h2 class="card-title">일의 성격 판별</h2></div>' +
-      '<div class="qlist" style="margin-top:0">' +
-      J.shapeQuestions.map(function (q) {
-        return '<button class="qrow ' + (SHAPE[q.k] ? 'on' : '') + '" data-a="shape" data-k="' + q.k + '">' +
-          '<span class="box">' + icon('check') + '</span>' +
-          '<span><span class="qt">' + esc(q.q) + '</span><span class="qh" style="display:block">' + esc(q.hint) + '</span></span>' +
-          '</button>';
-      }).join('') +
-      '</div>' +
-      '<div class="verdict ' + (any ? J.shapes[shapeKey].tone : '') + '" id="shape-result">' +
-      (any ? shapeBlock(shapeKey) : '<div class="vt"><span>결과</span></div><p class="vtitle">아직 판단 전</p><p class="vsub">하나라도 해당하면 “모아서 정하는 일”입니다.</p>') +
-      '</div>' +
-      '</section>' +
-
-      decisionsHTML() +
-      orderTableHTML() +
-      efficiencyHTML() +
-
-      '<section class="card">' +
-      '<div class="card-head"><span class="card-cap">12학급 공지</span></div>' +
-      '<h2 class="card-title">한 번에, 수정 없이, 마감·양식까지</h2>' +
-      J.noticeRules.map(function (r) {
-        return '<div class="trap" style="padding:12px 0"><div class="ico" style="background:#E8F3FF;color:#1B64DA;font-size:12px;font-weight:900">' + esc(r.t.slice(0, 2)) + '</div>' +
-          '<div><div class="tt">' + esc(r.t) + '</div><div class="td">' + esc(r.d) + '</div></div></div>';
-      }).join('') +
-      '<div class="notice-pre" style="margin-top:14px">' + esc(J.noticeTemplate) + '</div>' +
-      '<div class="btn-row"><button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(J.noticeTemplate) + '">' + icon('copy') + ' 공지 양식 복사</button></div>' +
-      '</section>' +
-
-      '<section class="card">' +
-      '<div class="card-head"><span class="card-cap">회의</span></div>' +
-      '<h2 class="card-title">12개 반 회의를 짧게 끝내는 법</h2>' +
-      '<ul class="plain-list">' + J.meetingRules.map(function (t) { return '<li><span class="b"></span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' +
-      '<div class="notice-pre" style="margin-top:14px">' + esc(J.meetingTemplate) + '</div>' +
-      '<div class="btn-row"><button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(J.meetingTemplate) + '">' + icon('copy') + ' 회의 안건 양식 복사</button></div>' +
-      '</section>' +
-
-      '<section class="card">' +
-      '<div class="card-head"><span class="card-cap">보고 3줄</span></div>' +
-      '<h2 class="card-title">보고는 길게 하지 않습니다</h2>' +
-      '<div class="notice-pre" style="margin-top:12px">' + esc(J.reportForm) + '</div>' +
-      '<p class="card-note" style="font-weight:800;color:#333D4B;margin-top:16px">예시</p>' +
-      '<div class="notice-pre">' + esc(J.reportExample) + '</div>' +
-      '<div class="btn-row"><button class="btn small line" data-a="copy" data-copy="' + encodeURIComponent(J.reportForm) + '">' + icon('copy') + ' 보고 양식 복사</button></div>' +
-      '</section>' +
-
-      '<section class="card">' +
-      '<div class="card-head"><h2 class="card-title">보고선 기준표</h2><span class="topbar-spacer"></span>' +
-      '<button class="mini-link" data-a="edit-report">' + icon('pencil') + ' 고치기</button></div>' +
-      '<p class="card-note" style="margin-top:0">혼자 판단해서 결론을 내리면 책임이 나에게 남습니다. 아래는 “누가 답을 정하는가”의 기준입니다.</p>' +
-      reportLinesData().map(function (g, gi) {
-        return '<div class="rep-group">' +
-          '<div class="rep-head"><span class="tag ' + (g.tone === 'danger' ? 'red' : g.tone === 'warn' ? 'amber' : 'green') + '">' + esc(g.level) + '</span>' +
-          '<span class="rep-note">' + esc(g.note) + '</span></div>' +
-          (g.items || []).map(function (it, ii) {
-            return '<div class="rep-item"><span class="b" style="flex:0 0 5px;width:5px;height:5px;border-radius:50%;background:' +
-              (g.tone === 'danger' ? '#F04452' : g.tone === 'warn' ? '#F07C00' : '#0E9F6E') + ';margin-top:9px"></span>' +
-              '<div style="flex:1;min-width:0"><div class="rt">' + esc(it.t) + '</div><div class="rd">' + esc(it.d) + '</div>' +
-              linkChipsHTML(it.links, 'report', gi, ii) + '</div></div>';
-          }).join('') +
-          '</div>';
-      }).join('') +
-      '</section>' +
-
-      '<section class="card">' +
-      '<div class="card-head"><h2 class="card-title">번복을 막는 4규칙</h2></div>' +
-      '<ul class="plain-list">' + J.flipRules.map(function (t) { return '<li><span class="b"></span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' +
-      '</section>' +
-      '<p class="foot-note">판단이 어려우면 홈의 3초 판단으로 돌아가세요. 여섯 질문이면 대부분 정리됩니다.</p>';
+      yearNoteHTML() +
+      (judgeWork >= 0 ? '' : pageHead('판단 · 조율', '내가 정할 일인가,<br>모아서 정할 일인가',
+        '성격을 가르고, 결재 순서를 확인하고, 보고선에서 끊습니다.')) +
+      judgeSegsHTML() +
+      '<div class="seg-body">' +
+      (judgeSeg === 'order' ? (judgeWork >= 0 ? judgeWorkHTML() : orderListHTML()) :
+        judgeSeg === 'report' ? reportDecideHTML() :
+          judgeSeg === 'forms' ? formsHTML() : judgeShapeHTML()) +
+      '</div>';
   }
 
   function decisionsHTML() {
@@ -1882,16 +2142,15 @@
 
   function shapeBlock(key) {
     var sh = D.judge.shapes[key];
-    return '<div class="vt"><span>결과</span></div>' +
-      '<p class="vtitle">' + esc(sh.title) + '</p>' +
-      '<p class="vsub">' + esc(sh.sub) + '</p>' +
-      '<div style="margin-top:14px;background:#fff;border-radius:15px;padding:6px 14px 12px;border:1px solid #E8EBEE">' +
-      sh.steps.map(function (s, i) {
-        return '<div class="step-line"><span class="n">' + (i + 1) + '</span><span class="t">' + esc(s) + '</span></div>';
-      }).join('') +
-      '</div>' +
-      '<div class="msgbox" style="margin-top:12px"><div class="mlabel">그대로 보낼 문장</div><div class="mtext">' + esc(sh.msg) + '</div>' +
-      '<div class="msgbox-foot" style="justify-content:flex-end"><button class="copy-btn" data-a="copy" data-copy="' + encodeURIComponent(sh.msg) + '">' + icon('copy') + '복사</button></div></div>';
+    return '<p class="result-cap">결과</p>' +
+      '<h2 class="result-title">' + esc(sh.title) + '</h2>' +
+      '<p class="result-sub">' + esc(sh.sub) + '</p>' +
+      '<div class="todo"><p class="sec-label">이렇게 진행하세요</p>' +
+      '<ol class="vtl">' + sh.steps.map(function (s, i) {
+        return '<li><span class="vtl-n">' + (i + 1) + '</span><span class="vtl-t">' + esc(s) + '</span></li>';
+      }).join('') + '</ol></div>' +
+      '<div class="msg"><div class="msg-head"><span class="msg-cap">그대로 보낼 문장</span></div>' +
+      '<p class="mtext">' + esc(sh.msg) + '</p>' + copyWide(sh.msg) + '</div>';
   }
 
   /* ------------------------------------------------------------- 부서 */
@@ -1899,40 +2158,40 @@
     var list = D.desks || [];
     return '' +
       yearNoteHTML() +
-      '<div class="page-head">' +
-      '<p class="page-eyebrow">기능부장 정석 · ' + esc(yearLabel()) + '</p>' +
-      '<h1 class="page-title">어느 부서를 맡아도 통하는 1년</h1>' +
-      '<p class="page-sub">부서마다 몰리는 달·서류·감사 포인트가 정해져 있습니다. 학년부장이 겸임해도 이 표 하나면 1년이 보입니다.</p>' +
-      '</div>' +
-      '<div class="desk-grid">' +
-      list.map(function (d) {
-        return '<button class="desk-card" data-a="desk" data-id="' + esc(d.id) + '">' +
-          '<span class="dc-emoji">' + esc(d.emoji || '📁') + '</span>' +
-          '<span class="dc-name">' + esc(d.name) + '</span>' +
-          '<span class="dc-line">' + esc(d.oneLine) + '</span>' +
-          '</button>';
-      }).join('') +
-      '</div>' +
-      '<p class="foot-note">부서별 상황 대응은 ‘대응’ 탭의 기능부장 프로토콜(교과서·정보·체육·늘봄·기초학력·안전·생활규정)을 함께 보세요.</p>';
+      pageHead('기능부장 정석', '어느 부서를 맡아도 통하는 1년',
+        '부서마다 몰리는 달·서류·감사 포인트가 정해져 있습니다. 하나를 고르면 1년이 보입니다.') +
+      '<div class="desk-list">' + list.map(function (d) {
+        return '<button class="desk-row" data-a="desk" data-id="' + esc(d.id) + '">' +
+          '<span class="gr-emoji">' + esc(d.emoji || '📁') + '</span>' +
+          '<span class="gr-body"><b>' + esc(d.name) + '</b><em>' + esc(d.oneLine) + '</em></span>' +
+          '<span class="next-a">' + icon('chevron') + '</span></button>';
+      }).join('') + '</div>' +
+      '<p class="foot-note">부서별 상황 대응은 ‘대응’ 탭의 기능부장 프로토콜과 이어집니다.</p>';
   }
 
   function deskSheet(id) {
     var d = (D.desks || []).filter(function (x) { return x.id === id; })[0];
     if (!d) return;
+    var pids = DESK_PROTOS[id] || [];
+    var protos = pids.map(function (pid) {
+      return protocolsData().filter(function (x) { return x.id === pid; })[0];
+    }).filter(Boolean);
     openSheet({
       title: d.emoji + ' ' + esc(d.name),
       sub: esc(d.oneLine),
       body:
-        '<div class="section-head" style="padding:6px 0 2px"><h2 class="section-title">1년 흐름</h2></div>' +
-        d.year.map(function (y) {
-          return '<div class="step-line"><span class="n" style="min-width:58px;width:auto;padding:0 8px">' + esc(y.m) + '</span><span class="t">' + esc(y.t) + '</span></div>';
-        }).join('') +
-        '<div class="section-head" style="padding:18px 0 4px"><h2 class="section-title">이 부서의 서류</h2></div>' +
-        '<ul class="plain-list">' + d.papers.map(function (t) { return '<li><span class="b"></span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' +
-        '<div class="section-head" style="padding:18px 0 4px"><h2 class="section-title">감사·점검 포인트</h2></div>' +
-        d.audit.map(function (t) { return '<div class="avoid-item"><span class="x">!</span><span>' + esc(t) + '</span></div>'; }).join('') +
-        '<div class="section-head" style="padding:18px 0 4px"><h2 class="section-title">베테랑 팁</h2></div>' +
-        d.tips.map(function (t) { return '<div class="hint-box" style="margin-top:8px"><span>💡</span><span>' + esc(t) + '</span></div>'; }).join(''),
+        '<p class="sec-label">1년 흐름</p>' +
+        '<div class="year-flow">' + d.year.map(function (y) {
+          return '<div class="yf-row"><span class="yf-m">' + esc(y.m) + '</span><p>' + esc(y.t) + '</p></div>';
+        }).join('') + '</div>' +
+        '<p class="sec-label">이 부서의 서류</p>' +
+        '<ul class="plain">' + d.papers.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
+        '<p class="sec-label">감사·점검 포인트</p>' +
+        '<ul class="avoid">' + d.audit.map(function (t) { return '<li><span class="av-x">!</span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' +
+        '<p class="sec-label">베테랑 팁</p>' +
+        d.tips.map(function (t) { return '<div class="tip">' + esc(t) + '</div>'; }).join('') +
+        (protos.length ? '<div class="next"><p class="sec-label">이 부서에서 바로 쓰는 프로토콜</p>' +
+          protos.map(function (p) { return nextRow('protocol', p.id, '', '프로토콜', p.title); }).join('') + '</div>' : ''),
       foot: '<button class="btn line" data-a="nav" data-r="respond">대응 프로토콜</button>' +
         '<button class="btn primary" data-a="close-sheet">닫기</button>'
     });
@@ -1940,14 +2199,12 @@
 
   /* ------------------------------------------------------------- 대응 */
   function viewRespond() {
+    var inDetail = respondTab === 'protocol' && !!respondGroup;
     return '' +
       yearNoteHTML() +
-      '<div class="page-head">' +
-      '<p class="page-eyebrow">갈등 · 민원 · 휴직 · ' + esc(yearLabel()) + '</p>' +
-      '<h1 class="page-title">상황별로 꺼내 쓰는 대응</h1>' +
-      '<p class="page-sub">할 일·절대 금지·보낼 문장이 정해져 있으면, 감정이 올라와도 흔들리지 않습니다.</p>' +
-      '</div>' +
-      '<div class="segmented" style="margin-bottom:16px">' +
+      (inDetail ? '' : pageHead('갈등 · 민원 · 휴직', '상황별로 꺼내 쓰는 대응',
+        '할 일·절대 금지·보낼 문장이 정해져 있으면, 감정이 올라와도 흔들리지 않습니다.')) +
+      '<div class="segmented" style="margin-bottom:18px">' +
       '<button class="' + (respondTab === 'protocol' ? 'active' : '') + '" data-a="respond-tab" data-t="protocol">대응 프로토콜</button>' +
       '<button class="' + (respondTab === 'tracker' ? 'active' : '') + '" data-a="respond-tab" data-t="tracker">12개 반 트래커</button>' +
       '</div>' +
@@ -1957,29 +2214,25 @@
   function protocolList() {
     if (Y().protocols) ensureProtocols();
     var list = protocolsData();
-    var groups = ['all', '공통', '기능부장', '학년 참고'];
-    var shown = list.filter(function (p) { return protocolFilter === 'all' || scopeGroup(p) === protocolFilter; });
-    return '<div class="btn-row" style="margin-top:0;margin-bottom:10px">' +
-      '<button class="btn line small" data-a="edit-protocol-list">' + icon('pencil') + ' 프로토콜 고치기</button>' +
-      '<button class="btn line small" data-a="new-protocol">' + icon('plus') + ' 새 프로토콜</button></div>' +
-      '<div class="filter-row" style="margin-bottom:14px">' +
-      groups.map(function (s) {
-        return '<button class="chip ' + (protocolFilter === s ? 'active' : '') + '" data-a="p-filter" data-v="' + s + '">' + (s === 'all' ? '전체' : s) + '</button>';
+    if (respondGroup === 'all') return allProtocolsHTML(list);
+    if (respondGroup) return groupProtocolsHTML(list, respondGroup);
+
+    var counts = {};
+    list.forEach(function (p) { var k = groupOf(p); counts[k] = (counts[k] || 0) + 1; });
+    return '<p class="lede">지금 상황과 가까운 주제를 고르세요. 40개 프로토콜이 6묶음으로 정리되어 있습니다.</p>' +
+      '<div class="list-card">' + PROTO_GROUPS.map(function (g) {
+        return '<button class="group-row" data-a="resp-group" data-v="' + g.k + '">' +
+          '<span class="gr-emoji">' + g.emoji + '</span>' +
+          '<span class="gr-body"><b>' + esc(g.name) + '</b><em>' + esc(g.desc) + ' · ' + (counts[g.k] || 0) + '개</em></span>' +
+          '<span class="next-a">' + icon('chevron') + '</span></button>';
       }).join('') +
+      '<button class="group-row all" data-a="resp-group" data-v="all">' +
+      '<span class="gr-emoji">📚</span>' +
+      '<span class="gr-body"><b>전체 프로토콜</b><em>' + list.length + '개 · 공통·기능부장·학년 참고로 걸러 보기</em></span>' +
+      '<span class="next-a">' + icon('chevron') + '</span></button>' +
       '</div>' +
-      '<div class="protocol-grid">' +
-      shown.map(function (p) {
-        return '<button class="pcard" data-a="protocol" data-id="' + esc(p.id) + '">' +
-          '<span class="emo">' + esc(p.emoji || '📌') + '</span>' +
-          '<span style="flex:1;min-width:0"><span class="pt" style="display:block">' + esc(p.title) + '</span>' +
-          '<span class="pw" style="display:block">' + esc(p.when) + '</span>' +
-          '<span class="scope-row"><span class="scope-chip ' + scopeTone(p) + '">' + esc(p.scope || '공통') + '</span></span>' +
-          ((p.links || []).filter(function (l) { return safeUrl(l.u); }).length ? '<span class="pw" style="display:block;color:#1B64DA">🔗 링크 ' + p.links.length + '개</span>' : '') +
-          '</span>' +
-          '<span class="arrow">' + icon('chevron') + '</span></button>';
-      }).join('') +
-      '</div>' +
-      '<p class="foot-note">공통은 학년부장·기능부장 모두에게 해당되는 실무입니다. 학년 참고는 해당 학년에서만 나오는 일입니다. 상황이 애매하면 홈의 3초 판단부터.</p>';
+      '<div class="result-foot"><button class="ghost-btn" data-a="edit-protocol-list">' + icon('pencil') + ' 프로토콜 고치기</button>' +
+      '<button class="ghost-btn" data-a="new-protocol">' + icon('plus') + ' 새 프로토콜</button></div>';
   }
 
   function scopeGroup(p) {
@@ -2092,24 +2345,23 @@
       return (b.date || '').localeCompare(a.date || '') || (b.updatedAt || 0) - (a.updatedAt || 0);
     });
   }
-
   function logListHTML() {
     var items = logSource();
     if (!items.length) {
-      return '<div class="empty">' + (logQuery ? '<div class="et">검색 결과가 없습니다</div><div class="ed">다른 낱말로 찾아보거나 “전체 학년도”로 범위를 넓혀 보세요.</div>'
-        : '<div class="et">첫 기록을 남겨 보세요</div><div class="ed">거창할 필요 없습니다. “오늘 어떤 질문을 받았고,<br>어떻게 답했고, 다음엔 어떻게 할지” 한 줄씩이면 충분합니다.</div>') + '</div>';
+      return '<div class="empty">' + (logQuery
+        ? '<div class="et">검색 결과가 없습니다</div><div class="ed">다른 낱말로 찾아보거나 “전체 학년도”로 범위를 넓혀 보세요.</div>'
+        : '<div class="et">첫 기록을 남겨 보세요</div><div class="ed">오늘 어떤 질문을 받았고, 어떻게 답했고,<br>다음엔 어떻게 할지 — 한 줄씩이면 충분합니다.</div>') + '</div>';
     }
     return items.map(function (r) {
-      return '<button class="card log-card" data-a="edit-retro" data-id="' + r.id + '" data-y="' + r._y + '">' +
+      var title = r.situation || r.decision || r.next || '(내용 없음)';
+      return '<button class="log-card" data-a="edit-retro" data-id="' + r.id + '" data-y="' + r._y + '">' +
         '<div class="log-head"><span class="tag ' + tagTone(r.tag) + '">' + esc(r.tag || '기록') + '</span>' +
-        (logScope === 'all' || r._y !== db.state.year ? '<span class="tag violet">' + esc(r._y) + '학년도</span>' : '') +
+        (logScope === 'all' || r._y !== db.state.year ? '<span class="tag violet">' + esc(r._y) + '</span>' : '') +
         '<span class="log-date">' + fmtDate(r.date) + '</span></div>' +
-        '<div class="log-body">' +
-        (r.situation ? '<div class="log-part"><span class="k">상황</span><span class="v">' + esc(r.situation) + '</span></div>' : '') +
-        (r.decision ? '<div class="log-part"><span class="k">내 판단</span><span class="v">' + esc(r.decision) + '</span></div>' : '') +
-        (r.result ? '<div class="log-part"><span class="k">결과</span><span class="v">' + esc(r.result) + '</span></div>' : '') +
-        (r.next ? '<div class="log-part next"><span class="k">다음엔</span><span class="v">' + esc(r.next) + '</span></div>' : '') +
-        '</div></button>' +
+        '<div class="log-title">' + esc(title) + '</div>' +
+        (r.decision && r.situation ? '<div class="log-sub">' + esc(r.decision) + '</div>' : '') +
+        (r.next ? '<div class="log-next">→ ' + esc(r.next) + '</div>' : '') +
+        '</button>' +
         '<div class="linkbar">' + linkChipsHTML(r.links, 'retro', r.id, r._y) + '</div>';
     }).join('');
   }
@@ -2117,22 +2369,18 @@
   function viewLog() {
     return '' +
       yearNoteHTML() +
-      '<div class="page-head">' +
-      '<p class="page-eyebrow">멘토 회고 · ' + esc(yearLabel()) + '</p>' +
-      '<h1 class="page-title">내가 내린 판단을 남깁니다</h1>' +
-      '<p class="page-sub">상황·판단·결과·다음에 바꿀 점. 4줄이면 다음에 같은 일이 와도 빠릅니다.</p>' +
-      '</div>' +
+      pageHead('멘토 회고 · ' + esc(yearLabel()), '내가 내린 판단을 남깁니다',
+        '상황·판단·결과·다음에 바꿀 점. 네 줄이면 같은 일이 다시 와도 빠릅니다.') +
       '<button class="btn primary block" data-a="open-retro">' + icon('plus') + ' 오늘 판단 기록하기</button>' +
       '<div class="searchbox">' +
       '<input class="input" id="log-q" placeholder="기록 검색 (상황·판단·결과)" value="' + esc(logQuery) + '">' +
       '<div class="segmented mini" style="margin-top:10px">' +
       '<button class="' + (logScope === 'current' ? 'active' : '') + '" data-a="log-scope" data-v="current">이 학년도</button>' +
       '<button class="' + (logScope === 'all' ? 'active' : '') + '" data-a="log-scope" data-v="all">전체 학년도</button>' +
-      '</div>' +
-      '</div>' +
-      '<div class="section-head" style="margin-top:22px"><h2 class="section-title" id="log-count">기록 ' + logSource().length + '건</h2></div>' +
+      '</div></div>' +
+      '<div class="sec-head"><h2 class="section-title" id="log-count">기록 ' + logSource().length + '건</h2></div>' +
       '<div id="log-list">' + logListHTML() + '</div>' +
-      '<div class="btn-row" style="margin-top:12px"><button class="btn line small" data-a="open-export">' + icon('down') + ' 내보내기·복사</button></div>' +
+      '<div class="result-foot"><button class="ghost-btn" data-a="open-export">' + icon('down') + ' 내보내기·복사</button></div>' +
       '<p class="foot-note">기록은 비공개입니다. 연결하면 내 구글 시트에만 저장되고, 공개 저장소에는 아무것도 올라가지 않습니다.</p>';
   }
 
@@ -2185,28 +2433,27 @@
       title: (p.emoji || '📌') + ' ' + esc(p.title),
       sub: esc(p.when),
       body:
-        (p.cvNew && p.cvNew > (p.cv || 0) ? '<div class="hint-box" style="margin-bottom:14px;background:#FFF9E8;border-color:#F5E3B3"><span>🆕</span><span><b>기본 내용이 새로 바뀌었습니다.</b><br>내가 고친 내용은 그대로 두었습니다. <button class="mini-link" data-a="apply-protocol-default" data-id="' + esc(p.id) + '">새 기본값 보기(메모·링크 유지)</button></span></div>' : '') +
-        '<div class="section-head" style="padding:6px 0 2px"><h2 class="section-title">할 일</h2><span class="section-hint">순서대로</span></div>' +
-        (p.steps || []).map(function (s, i) {
-          return '<div class="step-line"><span class="n">' + (i + 1) + '</span><span class="t">' + esc(s) + '</span></div>';
-        }).join('') +
-        '<div class="section-head" style="padding:18px 0 4px"><h2 class="section-title">절대 금지</h2></div>' +
-        (p.avoid || []).map(function (a) { return '<div class="avoid-item"><span class="x">✕</span><span>' + esc(a) + '</span></div>'; }).join('') +
-        '<div class="section-head" style="padding:18px 0 4px"><h2 class="section-title">그대로 보낼 문장</h2><span class="section-hint">수신자별</span></div>' +
-        groups.map(function (g) {
-          return '<div class="msg-group"><span class="msg-to">' + esc(g.k) + '</span></div>' +
-            g.items.map(function (l) {
-              return '<div class="line-card"><div class="lt">' + esc(l) + '</div>' +
-                '<div class="lf"><button class="copy-btn" data-a="copy" data-copy="' + encodeURIComponent(l) + '">' + icon('copy') + '복사</button></div></div>';
-            }).join('');
-        }).join('') +
-        (p.evidence ? '<div class="section-head" style="padding:18px 0 4px"><h2 class="section-title">현장 근거</h2></div><div class="notice-pre" style="background:#F7F9FB">' + esc(p.evidence) + '</div>' : '') +
-        (p.memo ? '<div class="section-head" style="padding:18px 0 4px"><h2 class="section-title">내 메모</h2></div><div class="notice-pre" style="background:#FFF9E8;border-color:#F5E3B3">' + esc(p.memo) + '</div>' : '') +
-        '<div class="section-head" style="padding:18px 0 4px"><h2 class="section-title">링크</h2></div>' +
-        (linkChipsHTML(p.links, 'protocol', p.id) || '<p class="card-note">관련 문서·공문 주소를 달아 두세요.</p>') +
-        '<div class="hint-box" style="margin-top:18px"><span>📝</span><span><b>기록 기준</b><br>' + esc(p.record || '') + '</span></div>',
-      foot: '<button class="btn line" data-a="edit-protocol" data-id="' + esc(p.id) + '">' + icon('pencil') + ' 수정</button>' +
-        '<button class="btn line" data-a="open-case-from-protocol" data-id="' + esc(p.id) + '">트래커</button>' +
+        (p.cvNew && p.cvNew > (p.cv || 0) ? '<div class="hint-box"><span>🆕</span><span><b>기본 내용이 새로 바뀌었습니다.</b><br>내가 고친 내용은 그대로 두었습니다. <button class="mini-link" data-a="apply-protocol-default" data-id="' + esc(p.id) + '">새 기본값 보기(메모·링크 유지)</button></span></div>' : '') +
+        '<p class="sec-label">지금 할 일</p>' +
+        '<ol class="vtl big">' + (p.steps || []).map(function (s, i) {
+          return '<li><span class="vtl-n">' + (i + 1) + '</span><span class="vtl-t">' + esc(s) + '</span></li>';
+        }).join('') + '</ol>' +
+        ((p.avoid || []).length ? '<p class="sec-label">절대 금지</p>' +
+          '<ul class="avoid">' + p.avoid.map(function (a) {
+            return '<li><span class="av-x">✕</span><span>' + esc(a) + '</span></li>';
+          }).join('') + '</ul>' : '') +
+        (groups.length ? '<p class="sec-label">그대로 보낼 문장</p>' + groups.map(function (g) {
+          return '<p class="msg-to">' + esc(g.k) + '</p>' + g.items.map(function (l) {
+            return '<div class="msg-item"><p>' + esc(l) + '</p>' + copyWide(l, '복사') + '</div>';
+          }).join('');
+        }).join('') : '') +
+        (p.record ? '<div class="note-box"><span>기록 기준</span><p>' + esc(p.record) + '</p></div>' : '') +
+        (p.evidence ? accHTML('현장 근거', '단톡방·아카이브에서 반복된 것', '<p class="quote">' + esc(p.evidence) + '</p>') : '') +
+        (p.memo ? '<div class="note-box memo"><span>내 메모</span><p>' + esc(p.memo) + '</p></div>' : '') +
+        '<p class="sec-label">링크</p>' +
+        (linkChipsHTML(p.links, 'protocol', p.id) || '<p class="card-sub">관련 문서·공문 주소를 달아 두세요.</p>'),
+      foot: '<button class="btn line small" data-a="edit-protocol" data-id="' + esc(p.id) + '">' + icon('pencil') + '</button>' +
+        '<button class="btn line" data-a="open-case-from-protocol" data-id="' + esc(p.id) + '">사안 기록</button>' +
         '<button class="btn primary" data-a="close-sheet">닫기</button>'
     });
   }
@@ -2727,7 +2974,7 @@
     D.monthOrder.forEach(function (m) {
       var d = D.radar[m]; if (!d) return;
       add('레이더', m + '월 · ' + d.title, d.lead,
-        [d.lead, d.route, d.report, d.deadline, (d.now || []).join(' '), (d.paper || []).join(' '), (d.checks || []).join(' '), (d.traps || []).map(function (t) { return t.t + ' ' + t.d; }).join(' '), (d.me || []).join(' '), d.notice, (d.voices || []).map(function (v) { return v.q + ' ' + v.a; }).join(' '), d.g3, d.g4, d.g5, d.g6].join(' '),
+        [d.lead, d.route, d.report, d.deadline, noticeOf(d, '3'), (d.now || []).join(' '), (d.paper || []).join(' '), (d.checks || []).join(' '), (d.traps || []).map(function (t) { return t.t + ' ' + t.d; }).join(' '), (d.me || []).join(' '), d.notice, (d.voices || []).map(function (v) { return v.q + ' ' + v.a; }).join(' '), d.g3, d.g4, d.g5, d.g6].join(' '),
         { a: 'go-month', m: m });
       (d.voices || []).forEach(function (v) {
         add('실제 고민', m + '월 · ' + (v.tag || '단톡방'), v.q, v.q + ' ' + v.a, { a: 'go-month', m: m });
@@ -2795,7 +3042,14 @@
       if (!ok) return;
       var w0 = words[0];
       var at = e.text.indexOf(w0);
-      var snip = at < 0 ? e.sub : e.text.slice(Math.max(0, at - 30), Math.max(0, at - 30) + 90);
+      var snip;
+      if (at < 0) { snip = e.sub; }
+      else {
+        var st0 = Math.max(0, at - 40);
+        snip = e.text.slice(st0, st0 + 110).replace(/\s+/g, ' ').trim();
+        if (st0 > 0) snip = '… ' + snip.replace(/^\S*\s/, '');
+        if (st0 + 110 < e.text.length) snip = snip.replace(/\s+\S*$/, '') + ' …';
+      }
       hits.push({ e: e, score: score, snip: snip });
     });
     hits.sort(function (a, b) { return b.score - a.score; });
@@ -2831,20 +3085,22 @@
       title: '설정',
       sub: '학년도·역할·명단·동기화를 정합니다.',
       body:
+        '<p class="sec-label">학년도 · 역할</p>' +
         '<div class="kv"><span class="k">학년도</span><span class="v">' + esc(yearLabel()) + '</span></div>' +
         '<div class="kv"><span class="k">역할·직책</span><span class="v">' + esc(roleLabel()) + '</span></div>' +
         '<div class="kv"><span class="k">학년</span><span class="v">' + Y().grade + '학년</span></div>' +
         '<div class="btn-row"><button class="btn line small" data-a="open-years">학년도·역할 바꾸기</button>' +
         '<button class="btn line small" data-a="open-roster">명단 관리</button></div>' +
-        '<div class="divider"></div>' +
-        '<div class="field" style="margin-top:0"><label>비공개 시트 연결 (Apps Script 웹 앱 주소)</label>' +
+
+        '<p class="sec-label">비공개 시트 연결</p>' +
         '<input class="input" id="s-url" placeholder="https://script.google.com/macros/s/…/exec" value="' + esc(db.url) + '">' +
-        '<p class="card-note">SETUP.md 순서대로 배포하면 주소가 나옵니다. 주소를 아는 사람만 내 데이터에 접근할 수 있으니 공유하지 마세요.</p></div>' +
+        '<p class="card-note" style="margin-top:8px">SETUP.md 순서대로 배포하면 주소가 나옵니다. 주소를 아는 사람만 내 데이터에 접근할 수 있으니 공유하지 마세요.</p>' +
         '<div class="btn-row"><button class="btn line small" data-a="test-conn">연결 확인</button>' +
-        '<button class="btn primary small" data-a="save-url">저장</button>' +
-        '<button class="btn line small" data-a="copy-link">이 페이지 링크 복사</button></div>' +
-        (db.url ? '<p class="card-note">연결되면 시트의 <b>명단</b> 탭도 함께 읽어 옵니다.</p>' : '') +
-        '<div class="divider"></div>' +
+        '<button class="btn primary small" data-a="save-url">저장</button></div>' +
+        '<div class="btn-row"><button class="btn line small" data-a="copy-link">' + icon('copy') + ' 이 페이지 링크 복사</button></div>' +
+        (db.url ? '<p class="card-note" style="margin-top:8px">연결되면 시트의 <b>명단</b> 탭도 함께 읽어 옵니다.</p>' : '') +
+
+        '<p class="sec-label">저장 현황</p>' +
         '<div class="kv"><span class="k">저장 위치</span><span class="v">' + (db.url ? '내 구글 시트 + 이 기기' : '이 기기만') + '</span></div>' +
         '<div class="kv"><span class="k">학년도 수</span><span class="v">' + db.state.years.length + '개</span></div>' +
         '<div class="kv"><span class="k">명단</span><span class="v">' + rosterTotal() + '명</span></div>' +
@@ -2886,10 +3142,53 @@
 
     if (a === 'nav') {
       route = el.dataset.r;
-      if (route === 'respond') respondTab = respondTab || 'protocol';
+      if (route === 'respond') { respondTab = respondTab || 'protocol'; respondGroup = ''; }
+      if (route === 'judge') { judgeWork = -1; judgeSeg = 'shape'; }
+      closeSheet();
       render();
       return;
     }
+    if (a === 'step-ans') {
+      var sk2 = stepNextKey();
+      if (!sk2) return;
+      STEP.a[sk2] = parseInt(el.dataset.v, 10) === 1 ? 1 : 0;
+      var fin = stepFinished(sk2, STEP.a[sk2]);
+      STEP.done = fin;
+      var fcard = $('#flow-card');
+      if (fcard) {
+        fcard.insertAdjacentHTML('afterend', fin ? resultHTML(stepOutcome()) : flowHTML());
+        fcard.parentNode.removeChild(fcard);
+      } else render();
+      return;
+    }
+    if (a === 'step-list') {
+      STEP.list = !STEP.list;
+      STEP.a = {};
+      STEP.done = false;
+      var lcard = $('#flow-card');
+      if (lcard) {
+        lcard.insertAdjacentHTML('afterend', flowHTML());
+        lcard.parentNode.removeChild(lcard);
+      } else render();
+      return;
+    }
+    if (a === 'step-restart') {
+      STEP.a = {};
+      STEP.list = false;
+      STEP.done = false;
+      render();
+      return;
+    }
+    if (a === 'judge-seg') { judgeSeg = el.dataset.v || 'shape'; judgeWork = -1; render(); return; }
+    if (a === 'judge-work') { judgeWork = parseInt(el.dataset.i, 10); render(); return; }
+    if (a === 'judge-work-back') { judgeWork = -1; render(); return; }
+    if (a === 'report-tab') { reportTab = el.dataset.v; reportLevel = 0; render(); return; }
+    if (a === 'report-level') { reportLevel = parseInt(el.dataset.v, 10); render(); return; }
+    if (a === 'resp-group') { respondGroup = el.dataset.v || ''; render(); return; }
+    if (a === 'resp-back') { respondGroup = ''; render(); return; }
+    if (a === 'open-principles') { principlesSheet(); return; }
+    if (a === 'go-judge-seg') { judgeSeg = el.dataset.v || 'shape'; judgeWork = -1; route = 'judge'; closeSheet(); render(); return; }
+    if (a === 'nav-desk') { route = 'desk'; closeSheet(); render(); return; }
     if (a === 'toggle-q') {
       var k = el.dataset.k;
       Q[k] = Q[k] ? 0 : 1;
@@ -2904,9 +3203,9 @@
       var any = SHAPE.affect || SHAPE.fair || SHAPE.approval || SHAPE.flip;
       var key = (SHAPE.fair || SHAPE.approval || SHAPE.flip) ? 'collect' : 'draft';
       var box = $('#shape-result');
-      box.className = 'verdict ' + (any ? D.judge.shapes[key].tone : '');
+      box.className = 'result ' + (any ? D.judge.shapes[key].tone : 'neutral') + ' shape-result';
       box.innerHTML = any ? shapeBlock(key) :
-        '<div class="vt"><span>결과</span></div><p class="vtitle">아직 판단 전</p><p class="vsub">하나라도 해당하면 “모아서 정하는 일”입니다.</p>';
+        '<p class="result-empty">아직 판단 전<span>하나라도 해당하면 결과와 순서가 나옵니다.</span></p>';
       return;
     }
     if (a === 'month') { radarMonth = parseInt(el.dataset.m, 10); render(); return; }
@@ -3022,8 +3321,11 @@
     if (a === 'del-retro') { delRetro(el.dataset.id, el.dataset.y); return; }
     if (a === 'log-scope') { logScope = el.dataset.v; render(); return; }
     if (a === 'verdict-save') {
-      var o = D.quick.outcomes[verdictKey()];
-      var answers = D.quick.questions.map(function (q) { return (Q[q.k] ? 'O' : 'X') + ' ' + q.q; }).join(' / ');
+      var o = D.quick.outcomes[currentOutcomeKey()];
+      var answered = STEP_ORDER.filter(function (k) { return STEP.a[k] !== undefined; });
+      var answers = answered.length
+        ? answered.map(function (k) { return (STEP.a[k] ? 'O' : 'X') + ' ' + STEP_TEXT[k].q; }).join(' / ')
+        : D.quick.questions.map(function (q) { return (Q[q.k] ? 'O' : 'X') + ' ' + q.q; }).join(' / ');
       openSheet(retroForm({
         id: '', date: todayISO(), tag: '판단',
         situation: '동학년 질문·민원 접수 → 3초 판단: ' + o.title,
@@ -3032,7 +3334,7 @@
       }));
       return;
     }
-    if (a === 'open-protocol') { route = 'respond'; respondTab = 'protocol'; render(); return; }
+    if (a === 'open-protocol') { route = 'respond'; respondTab = 'protocol'; respondGroup = ''; render(); return; }
     if (a === 'edit-links') { linkSheet(el.dataset.kind, el.dataset.k1, el.dataset.k2); return; }
     if (a === 'link-add') {
       var lbox = $('.elist[data-l="links"]');
@@ -3219,9 +3521,9 @@
 
   document.addEventListener('change', function (e) {
     if (e.target.id === 'time-input') {
-      var o = D.quick.outcomes[verdictKey()];
+      var o = D.quick.outcomes[currentOutcomeKey()];
       var label = timeLabel(e.target.value);
-      var wrap = $('#verdict-wrap');
+      var wrap = $('#flow-card') || $('#verdict-wrap') || document.querySelector('.result');
       if (wrap) {
         var box = wrap.querySelector('.mtext');
         if (box) box.textContent = o.msg.replace('{time}', label);
@@ -3238,6 +3540,15 @@
   });
 
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSheet(); });
+
+  window.addEventListener('hashchange', function () {
+    var m = location.hash.match(/^#(today|radar|judge|respond|desk|log)$/);
+    if (!m) return;
+    route = m[1];
+    if (route === 'respond') { respondTab = 'protocol'; respondGroup = ''; }
+    if (route === 'judge') { judgeSeg = 'shape'; judgeWork = -1; }
+    render();
+  });
 
   window.addEventListener('scroll', function () {
     var tb = $('#topbar');
@@ -3259,6 +3570,10 @@
         try { history.replaceState(null, '', location.pathname + location.search); } catch (e2) { /* 무시 */ }
       }
     } catch (e) { /* 무시 */ }
+    try {
+      var hm = location.hash.match(/^#(today|radar|judge|respond|desk|log)$/);
+      if (hm) { route = hm[1]; if (route === 'respond') respondTab = 'protocol'; }
+    } catch (e3) { /* 무시 */ }
     radarMonth = new Date().getMonth() + 1;
 
     document.body.innerHTML = shell();
