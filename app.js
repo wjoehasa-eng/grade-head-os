@@ -8,7 +8,7 @@
 
   var D = GH.data;
   var LS_KEY = 'grade-head-os.v1';
-  var APP_VERSION = '4.0.0';
+  var APP_VERSION = '4.0.2';
 
   /* 학년도는 3월에 시작합니다 (1~2월은 지난 학년도). */
   var NOW = new Date();
@@ -1523,7 +1523,7 @@
       (d.voices && d.voices.length ? '<section class="card">' +
         '<div class="card-head"><span class="card-cap">단톡방에서 실제로 나온 고민</span></div>' +
         '<h2 class="card-title" style="margin-bottom:4px">부장들이 실제로 막힌 지점</h2>' +
-        '<p class="card-note" style="margin-top:0;margin-bottom:6px">전국 학년·교무·생활인성·안전 단톡방(2026년)에서 반복된 질문을 익명·일반화했습니다. 학년에 따라 다른 항목은 태그로 표시했습니다.</p>' +
+        '<p class="card-note" style="margin-top:0;margin-bottom:6px">전국 학년부장·교무·생활인성·학폭·안전·체육·늘봄·정보·교과서·기초학력 방(2026년)에서 반복된 질문을 익명·일반화했습니다. 학년에 따라 다른 항목은 태그로 표시했습니다.</p>' +
         d.voices.map(function (v) {
           return '<div class="voice">' +
             (v.tag ? '<span class="vtag">' + esc(v.tag) + '</span>' : '') +
@@ -1808,7 +1808,7 @@
       '<div class="card-head"><h2 class="card-title">번복을 막는 4규칙</h2></div>' +
       '<ul class="plain-list">' + J.flipRules.map(function (t) { return '<li><span class="b"></span><span>' + esc(t) + '</span></li>'; }).join('') + '</ul>' +
       '</section>' +
-      '<p class="foot-note">판단이 어려우면 홈의 3초 판단으로 돌아가세요. 세 질문이면 대부분 정리됩니다.</p>';
+      '<p class="foot-note">판단이 어려우면 홈의 3초 판단으로 돌아가세요. 여섯 질문이면 대부분 정리됩니다.</p>';
   }
 
   function decisionsHTML() {

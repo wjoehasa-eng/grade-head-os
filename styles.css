@@ -486,6 +486,7 @@ a { color: inherit; text-decoration: none; }
 .now-list { margin: 18px 0 0; display: flex; flex-direction: column; gap: 8px; }
 .now-item {
   display: flex; gap: 10px; align-items: flex-start;
+  min-width: 0; overflow-wrap: anywhere;
   background: rgba(255,255,255,.14);
   border-radius: 13px;
   padding: 12px 13px;
