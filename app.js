@@ -69,7 +69,7 @@
     if (p.length < 3) return iso;
     return p[0].slice(2) + '.' + p[1] + '.' + p[2];
   }
-  function weekdayKor(d) { return ['일', '월', '화', '수', '목', '금', ''][d.getDay()]; }
+  function weekdayKor(d) { return ['일', '월', '화', '수', '목', '금', '토'][d.getDay()]; }
   function uniq(arr) {
     var seen = {}, out = [];
     arr.forEach(function (v) { if (!seen[v]) { seen[v] = 1; out.push(v); } });
@@ -1166,7 +1166,7 @@
         '<div class="verdict empty">' +
         '<div class="vt"><span>지금 판단</span></div>' +
         '<p class="vtitle">아직 판단 전</p>' +
-        '<p class="vsub">위 3가지를 체크하면 결론이 바로 나옵니다.</p>' +
+        '<p class="vsub">위 6가지 중 하나라도 체크하면 결론이 바로 나옵니다.</p>' +
         '</div>';
     }
     var time = timeLabel(($('#time-input') && $('#time-input').value) || to24(defaultTime()));
@@ -1360,7 +1360,7 @@
       '<div class="page-head">' +
       '<p class="page-eyebrow">' + m + '월 ' + now.getDate() + '일 ' + weekdayKor(now) + '요일 · ' + esc(roleLabel()) + ' · ' + esc(yearLabel()) + '</p>' +
       '<h1 class="page-title">지금 바로 답해도 되나?</h1>' +
-      '<p class="page-sub">질문·민원·돌발 상황이 오면, 답하기 전에 3가지만 확인하세요.</p>' +
+      '<p class="page-sub">질문·민원·돌발이 오면 답하기 전에 6가지만 확인하세요. 3초면 결론과 보낼 문장이 나옵니다.</p>' +
       '</div>' +
 
       '<button class="search-cta" data-a="search">' + icon('search') +
