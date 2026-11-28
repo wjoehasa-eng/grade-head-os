@@ -146,7 +146,7 @@ a { color: inherit; text-decoration: none; }
   height: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
   padding-bottom: env(safe-area-inset-bottom, 0px);
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   background: rgba(255, 255, 255, .96);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -1380,3 +1380,75 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 360px) {
   .role-pill { max-width: 78px; }
 }
+
+
+/* ------------------------------------------------ v4: 순서표·결정권·부서 */
+.order-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 14px 10px;
+  margin-top: 12px;
+  background: #fff;
+}
+.oc-head { font-size: 15px; font-weight: 900; color: #191F28; letter-spacing: -0.02em; }
+.oc-flow { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px; }
+.oc-step {
+  background: #EEF4FF; color: #1B64DA;
+  border-radius: 9px; padding: 5px 9px;
+  font-size: 11.5px; font-weight: 800; line-height: 1.35;
+}
+.oc-arrow { color: #B0B8C1; font-weight: 900; font-size: 12px; align-self: center; }
+.oc-row { display: flex; gap: 8px; font-size: 12.5px; color: #4E5968; line-height: 1.5; margin-top: 4px; }
+.oc-row .oc-k {
+  flex: 0 0 34px; font-weight: 900; color: #8B95A1; font-size: 11px;
+  padding-top: 2px; letter-spacing: -0.02em;
+}
+.msg-group { margin-top: 10px; }
+.msg-group:first-child { margin-top: 0; }
+.msg-to {
+  display: inline-block; background: #F2F4F6; color: #4E5968;
+  border-radius: 7px; padding: 3px 8px; font-size: 11px; font-weight: 900;
+}
+.desk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.desk-card {
+  text-align: left; background: #fff; border: 1px solid var(--line);
+  border-radius: 18px; padding: 16px 14px; display: flex; flex-direction: column; gap: 5px;
+}
+.desk-card:active { transform: scale(.99); }
+.dc-emoji { font-size: 22px; line-height: 1; }
+.dc-name { font-size: 15px; font-weight: 900; color: #191F28; letter-spacing: -0.02em; }
+.dc-line { font-size: 12px; color: #6B7684; line-height: 1.5; }
+@media (min-width: 900px) {
+  .desk-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .desk-card { padding: 20px 18px; }
+  .dc-name { font-size: 17px; }
+  .dc-line { font-size: 13px; }
+}
+
+/* --------------------------------------------------- v4: 찾기 */
+.search-cta {
+  width: 100%; display: flex; align-items: center; gap: 10px;
+  background: #fff; border: 1px solid var(--line); border-radius: 16px;
+  padding: 13px 14px; margin-bottom: 14px; text-align: left;
+  color: #4E5968;
+}
+.search-cta svg { width: 19px; height: 19px; color: #1B64DA; flex: 0 0 19px; }
+.sc-t { flex: 1; min-width: 0; font-size: 13px; font-weight: 800; letter-spacing: -0.02em; }
+.sc-k {
+  flex: 0 0 auto; font-size: 11px; font-weight: 900; color: #1B64DA;
+  background: #E8F3FF; border-radius: 8px; padding: 4px 9px;
+}
+.srch-row {
+  width: 100%; display: flex; align-items: flex-start; gap: 9px;
+  padding: 12px 2px; border-bottom: 1px solid #F2F4F6; text-align: left;
+}
+.srch-row:last-child { border-bottom: 0; }
+.sr-type {
+  flex: 0 0 auto; font-size: 10.5px; font-weight: 900; color: #1B64DA;
+  background: #EEF4FF; border-radius: 7px; padding: 3px 7px; margin-top: 1px;
+}
+.sr-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sr-title { font-size: 13.5px; font-weight: 800; color: #191F28; letter-spacing: -0.02em; }
+.sr-snip { font-size: 12px; color: #6B7684; line-height: 1.45; }
+.srch-row .arrow { color: #B0B8C1; align-self: center; }
+.srch-row .arrow svg { width: 16px; height: 16px; }
